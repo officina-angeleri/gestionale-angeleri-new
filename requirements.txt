@@ -1,0 +1,9 @@
+PyQt6
+SQLAlchemy
+pandas
+beautifulsoup4
+lxml
+matplotlib
+pdfplumber
+openpyxl
+pyinstaller

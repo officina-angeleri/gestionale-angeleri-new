@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Database locale
+invoices.db
+
+# GUI/Build
+AnalisiFatture.spec
+build/
+dist/
+
+# System/Logs
+error.log
+argv.json
+settings.json
+
+# Excel/PDF temporanei
+*.xlsx
+*.csv
+*.pdf
+*.htm
+
+# Antigravity/Config
+.gemini/
+.antigravity/
+conversations/
+Configure Selection.md
