@@ -1,10 +1,11 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, 
                              QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, 
-                             QLabel, QCheckBox)
+                             QLabel, QCheckBox, QComboBox)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
 import re
 from app.utils.ui_utils import SortableTableWidgetItem
+from app.database import get_db_session, Supplier
 
 class ArticleSearchWidget(QWidget):
     def __init__(self, controller, parent=None):
@@ -13,6 +14,7 @@ class ArticleSearchWidget(QWidget):
         self.main_window = parent
         self.active_search_steps = []
         self.setup_ui()
+        self._populate_suppliers()
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -21,6 +23,17 @@ class ArticleSearchWidget(QWidget):
         title = QLabel("Ricerca Articoli nelle Fatture")
         title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         layout.addWidget(title)
+
+        # Filtro fornitore
+        supplier_layout = QHBoxLayout()
+        supplier_layout.addWidget(QLabel("Fornitore:"))
+        self.combo_supplier = QComboBox()
+        self.combo_supplier.setFixedHeight(36)
+        self.combo_supplier.setMinimumWidth(220)
+        self.combo_supplier.setCursor(Qt.CursorShape.PointingHandCursor)
+        supplier_layout.addWidget(self.combo_supplier)
+        supplier_layout.addStretch()
+        layout.addLayout(supplier_layout)
 
         # Search input
         search_layout = QHBoxLayout()
@@ -84,6 +97,18 @@ class ArticleSearchWidget(QWidget):
         self.status_label.setStyleSheet("color: #888;")
         layout.addWidget(self.status_label)
 
+    def _populate_suppliers(self):
+        """Popola il combo fornitore dal DB."""
+        session = get_db_session()
+        try:
+            suppliers = session.query(Supplier.name).order_by(Supplier.name).all()
+        finally:
+            session.close()
+        self.combo_supplier.clear()
+        self.combo_supplier.addItem("Tutti i fornitori", userData=None)
+        for (name,) in suppliers:
+            self.combo_supplier.addItem(name, userData=name)
+
     def update_mode_label(self):
         if self.cb_incremental.isChecked():
             self.lbl_mode.setText("Modalità: Ricerca incrementale")
@@ -111,10 +136,13 @@ class ArticleSearchWidget(QWidget):
         if not search_code and not search_desc:
             search_code = search_desc = True # Fallback
             
+        supplier_filter = self.combo_supplier.currentData()  # None = tutti
+
         current_step = {
             'words': words,
             'search_code': search_code,
-            'search_desc': search_desc
+            'search_desc': search_desc,
+            'supplier': supplier_filter,
         }
         
         if not self.cb_incremental.isChecked():

@@ -121,23 +121,25 @@ class InvoiceManager:
     def search_items(self, search_steps):
         """
         Search for invoice items based on multiple search steps (FOR incremental search).
-        search_steps: list of dicts like {'words': [...], 'search_code': bool, 'search_desc': bool}
+        search_steps: list of dicts like {'words': [...], 'search_code': bool, 'search_desc': bool, 'supplier': str|None}
         """
         from sqlalchemy import or_, and_
         import re
         
-        query = self.session.query(InvoiceItem).join(Invoice)
+        query = self.session.query(InvoiceItem).join(Invoice).join(Supplier)
         
         all_conditions = []
+        supplier_filter = None  # Prende l'ultimo step che ha un fornitore impostato
+
         for step in search_steps:
             step_conditions = []
-            # Each word in step['words'] is a fragment that must match (AND logic)
-            # If the user input was "rossi%marco", words might be ["rossi", "marco"]
+            # Filtro fornitore dal primo step che lo definisce (non None)
+            if step.get('supplier'):
+                supplier_filter = step['supplier']
+
             for word in step['words']:
                 if not word: continue
                 
-                # Standard behavior: wrap in % for "contains"
-                # If the user already provided %, we use it as is
                 pattern = f"%{word}%" if '%' not in word else word
                 
                 field_filters = []
@@ -154,5 +156,9 @@ class InvoiceManager:
         
         if all_conditions:
             query = query.filter(and_(*all_conditions))
+
+        # Filtro fornitore
+        if supplier_filter:
+            query = query.filter(Supplier.name == supplier_filter)
             
         return query.order_by(Invoice.date.desc(), Invoice.number.desc()).all()

@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Gestionale Angeleri",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "c:\\Users\\Simone\\.gemini\\antigravity\\scratch\\.antigravity\\Gestionale Angeleri\\main.py",
+            "python": "c:\\Users\\Simone\\.gemini\\antigravity\\scratch\\.antigravity\\Gestionale Angeleri\\venv\\Scripts\\python.exe",
+            "cwd": "c:\\Users\\Simone\\.gemini\\antigravity\\scratch\\.antigravity\\Gestionale Angeleri",
+            "console": "integratedTerminal"
+        }
+    ]
+}

@@ -91,26 +91,11 @@ class MainWindow(QMainWindow):
             current.refresh_data()
         self.status_bar.showMessage("Dati aggiornati.")
 
-    def show_invoice_detail_by_id(self, invoice_id):
-        """Helper to show invoice detail from search results."""
-        from .analysis import HistoryDialog
-        # In this project, detail is usually shown via HistoryDialog for a product, 
-        # or we might need a dedicated InvoiceDetail dialog.
-        # Let's check if there is an Invoice Detail dialog or just use a message box for now 
-        # or implement a simple detail dialog if missing.
-        from PyQt6.QtWidgets import QMessageBox
-        
-        # For now, let's look if we have a detail dialog in the project
-        # If not, let's create a minimal one or just print to console to verify the link works.
-        session = self.controller.session
-        from ..database import Invoice
-        invoice = session.query(Invoice).get(invoice_id)
-        if invoice:
-            QMessageBox.information(self, "Dettaglio Fattura", 
-                                    f"Fattura N. {invoice.number} del {invoice.date}\n"
-                                    f"Fornitore: {invoice.supplier.name}\n"
-                                    f"Totale: € {invoice.total_amount:.2f}\n\n"
-                                    f"File: {invoice.file_path}")
+    def show_invoice_detail_by_id(self, invoice_id: int):
+        """Apre il dialogo dettaglio fattura dalla ricerca articoli."""
+        from .invoice_detail import InvoiceDetailDialog
+        dlg = InvoiceDetailDialog(invoice_id, parent=self)
+        dlg.exec()
         
     def change_database(self):
         from PyQt6.QtWidgets import QMessageBox

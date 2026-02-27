@@ -7,6 +7,7 @@ venv/
 
 # Database locale
 invoices.db
+Fornitori/invoices.db
 
 # GUI/Build
 AnalisiFatture.spec
@@ -28,4 +29,16 @@ settings.json
 .gemini/
 .antigravity/
 conversations/
-Configure Selection.md
+Configure*.md
+extensions/
+
+# File di test e debug
+test_*.py
+test_*.txt
+debug_*.py
+check_*.py
+cleanup_*.py
+binder_text.txt
+invoice_parser.py
+build_local.py
+
