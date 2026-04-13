@@ -9,6 +9,26 @@ from ..parsers.xml_sdi import XMLSDIInvoiceParser
 
 from .product_matcher import ProductMatcher
 
+# ---------------------------------------------------------------------------
+# Mappa alias -> nome canonico del fornitore.
+# Aggiungere qui nuove varianti ogni volta che un XML usa una denominazione
+# diversa da quella gia' presente nel DB.
+# ---------------------------------------------------------------------------
+SUPPLIER_ALIASES: dict[str, str] = {
+    # MATTI
+    "MATTI S.r.l.": "MATTI SRL OFFICINE MECCANICHE",
+    "MATTI SRL":    "MATTI SRL OFFICINE MECCANICHE",
+    "MATTI S.R.L.": "MATTI SRL OFFICINE MECCANICHE",
+    # ALUSIC
+    "ALUSIC S.p.a.": "ALUSIC S.r.l.",
+    "ALUSIC S.P.A.": "ALUSIC S.r.l.",
+    "ALUSIC SRL":    "ALUSIC S.r.l.",
+    # ICS FIRPO
+    "I.C.S. FIRPO S.P.A.": "I.C.S. FIRPO S.R.L.",
+    "ICS FIRPO SPA":       "I.C.S. FIRPO S.R.L.",
+    "ICS FIRPO S.P.A.":    "I.C.S. FIRPO S.R.L.",
+}
+
 class InvoiceManager:
     def __init__(self):
         self.session: Session = get_db_session()
@@ -18,6 +38,11 @@ class InvoiceManager:
             PDFInvoiceParser(),
         ]
         self.matcher = ProductMatcher(self.session)
+
+    @staticmethod
+    def _normalize_supplier(name: str) -> str:
+        """Risolve varianti di denominazione al nome canonico tramite SUPPLIER_ALIASES."""
+        return SUPPLIER_ALIASES.get(name, name)
 
     def _get_parser(self, file_path: str) -> InvoiceParser:
         for parser in self.parsers:
@@ -39,9 +64,12 @@ class InvoiceManager:
         saved_invoices = []
         
         for parsed_data in parsed_invoices_list:
-            # Check if invoice already exists
+            # Normalizza il nome fornitore (gestisce varianti di denominazione)
+            canonical_name = self._normalize_supplier(parsed_data.supplier_name)
+
+            # Check if invoice already exists (usa il nome canonico)
             existing = self.session.query(Invoice).join(Supplier).filter(
-                Supplier.name == parsed_data.supplier_name,
+                Supplier.name == canonical_name,
                 Invoice.number == parsed_data.number,
                 Invoice.date == parsed_data.date
             ).first()
@@ -50,10 +78,10 @@ class InvoiceManager:
                  print(f"Skipping existing invoice {parsed_data.number}")
                  continue
 
-            # Get or Create Supplier
-            supplier = self.session.query(Supplier).filter_by(name=parsed_data.supplier_name).first()
+            # Get or Create Supplier (usa il nome canonico)
+            supplier = self.session.query(Supplier).filter_by(name=canonical_name).first()
             if not supplier:
-                supplier = Supplier(name=parsed_data.supplier_name)
+                supplier = Supplier(name=canonical_name)
                 self.session.add(supplier)
                 self.session.flush()
 
