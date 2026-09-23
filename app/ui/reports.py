@@ -94,8 +94,8 @@ class ReportWidget(QWidget):
         current_supp = self.combo_supplier.currentText()
         current_year = self.combo_year.currentText()
         
-        suppliers = sorted(list(set(d['Fornitore'] for d in self.data)))
-        years = sorted(list(set(d['Anno'] for d in self.data)), reverse=True)
+        suppliers = sorted(list(set(str(d['Fornitore']) for d in self.data if d.get('Fornitore'))))
+        years = sorted(list(set(str(d['Anno']) for d in self.data if d.get('Anno') is not None)), reverse=True)
         
         self.combo_supplier.blockSignals(True)
         self.combo_supplier.clear()

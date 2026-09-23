@@ -13,7 +13,7 @@ class PDFInvoiceParser(InvoiceParser):
         invoices = []
         lines = [l.strip() for l in text.split('\n') if l.strip()]
         
-        current_header = {'supplier': "Sconosciuto", 'number': None, 'date': None}
+        current_header = {'supplier': "Sconosciuto", 'number': None, 'date': None, 'piva': ""}
         current_items = []
         current_item_data = {}
         buffer_desc = []
@@ -39,12 +39,13 @@ class PDFInvoiceParser(InvoiceParser):
                 total = sum(item.total_price for item in current_items)
                 try:
                     invoices.append(ParsedInvoice(
-                        supplier_name=str(current_header['supplier']),
+                        supplier_name=" ".join(str(current_header['supplier']).split()),
                         date=current_header['date'] or datetime.now().date(),
                         number=str(current_header['number']),
                         total_amount=float(total),
                         items=list(current_items),
-                        original_file_path=str(file_path)
+                        original_file_path=str(file_path),
+                        supplier_piva=str(current_header.get('piva', ''))
                     ))
                 except: pass
             current_items = []
@@ -76,6 +77,7 @@ class PDFInvoiceParser(InvoiceParser):
                     if is_new:
                         save_current_invoice()
                         current_header['supplier'] = "Sconosciuto"
+                        current_header['piva'] = ""
                         current_header['number'] = num
                         for fmt in ('%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d'):
                             try:
@@ -87,9 +89,13 @@ class PDFInvoiceParser(InvoiceParser):
                         for j in range(1, 12):
                             if i+j < len(lines):
                                 cand = lines[i+j].strip()
+                                p_match = re.search(r'(?i)P\.?\s*I(?:VA)?\.?\s*:?\s*(?:IT)?(\d{11})', cand)
+                                if p_match and not current_header.get('piva'):
+                                    current_header['piva'] = p_match.group(1)
                                 if any(k in cand.upper() for k in ["SRL", "SPA", "S.R.L.", "S.P.A.", "SNC", "SAS"]):
                                     if not any(k in cand.upper() for k in ["CEDENTE", "PRESTATORE", "CESSIONARIO", "COMMITTENTE"]):
-                                        current_header['supplier'] = re.split(r'(?i)\s{2,}|P\.I\.|C\.F\.|TD\d+|VIA |CORSO |PIAZZA |VIALE ', cand)[0].strip()
+                                        raw_s = re.split(r'(?i)\s{2,}|P\.I\.|C\.F\.|TD\d+|VIA |CORSO |PIAZZA |VIALE ', cand)[0].strip()
+                                        current_header['supplier'] = " ".join(raw_s.split())
                                         break
 
             # 2. ARTICOLI
@@ -153,12 +159,13 @@ class PDFInvoiceParser(InvoiceParser):
             nonlocal current_items, curr_doc_number, curr_doc_date
             if current_items and curr_doc_number:
                 invoices.append(ParsedInvoice(
-                    supplier_name=curr_supplier,
+                    supplier_name=" ".join(curr_supplier.split()),
                     date=curr_doc_date or datetime.now().date(),
                     number=curr_doc_number,
                     total_amount=sum(item.total_price for item in current_items),
                     items=list(current_items),
-                    original_file_path=file_path
+                    original_file_path=file_path,
+                    supplier_piva="00689730133"
                 ))
             current_items = []
 

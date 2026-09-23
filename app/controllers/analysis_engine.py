@@ -151,24 +151,29 @@ class AnalysisEngine:
         """
         Restituisce dati aggregati per Fornitore e Anno.
         Include sia il Netto (somma articoli) che il Lordo (totale fatture).
+        Compatibile sia con PostgreSQL che con SQLite.
         """
+        from sqlalchemy import cast, String
+
+        anno_expr = cast(func.extract('year', Invoice.date), String).label('Anno')
+
         # 1. Calcolo Netto (da InvoiceItem)
         net_query = self.session.query(
             Supplier.name.label('Fornitore'),
-            func.strftime('%Y', Invoice.date).label('Anno'),
+            anno_expr,
             func.sum(InvoiceItem.total_price).label('TotaleNetto')
         ).join(Invoice, Supplier.id == Invoice.supplier_id) \
          .join(InvoiceItem, Invoice.id == InvoiceItem.invoice_id) \
-         .group_by('Fornitore', 'Anno').subquery()
+         .group_by(Supplier.name, anno_expr).subquery()
 
         # 2. Calcolo Lordo e Conteggio (da Invoice)
         gross_query = self.session.query(
             Supplier.name.label('Fornitore'),
-            func.strftime('%Y', Invoice.date).label('Anno'),
+            anno_expr,
             func.sum(Invoice.total_amount).label('TotaleLordo'),
             func.count(Invoice.id).label('NumFatture')
         ).join(Supplier, Supplier.id == Invoice.supplier_id) \
-         .group_by('Fornitore', 'Anno').subquery()
+         .group_by(Supplier.name, anno_expr).subquery()
 
         # Join dei risultati
         final_query = self.session.query(
@@ -182,3 +187,4 @@ class AnalysisEngine:
         
         results = final_query.all()
         return [dict(row._asdict()) for row in results]
+

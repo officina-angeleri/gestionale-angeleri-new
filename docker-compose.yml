@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  postgres_angeleri:
+    image: postgres:16-alpine
+    container_name: angeleri_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: angeleri_db
+      POSTGRES_USER: angeleri
+      POSTGRES_PASSWORD: AngeleriPassword2026!
+      TZ: Europe/Rome
+    ports:
+      - "5433:5432"
+    volumes:
+      - /volume1/docker/postgres_angeleri/data:/var/lib/postgresql/data

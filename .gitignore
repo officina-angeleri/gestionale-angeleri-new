@@ -5,9 +5,17 @@ __pycache__/
 venv/
 .env
 
-# Database locale
+# Database locale & backup
+*.db
+*.sqlite
+*.sqlite3
 invoices.db
-Fornitori/invoices.db
+invoices_backup*.db
+
+# Dati privati aziendali / fatture / esplosi
+Fornitori/
+File_per_progetto/
+ca_bundle_windows.pem
 
 # GUI/Build
 AnalisiFatture.spec
@@ -41,4 +49,3 @@ cleanup_*.py
 binder_text.txt
 invoice_parser.py
 build_local.py
-

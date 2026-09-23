@@ -1,10 +1,15 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, 
-                             QHBoxLayout, QLabel, QHeaderView, QPushButton, QDialog, QLineEdit, QScrollArea, QFrame)
+                             QHBoxLayout, QLabel, QHeaderView, QPushButton, QDialog, QLineEdit, QScrollArea, QFrame,
+                             QComboBox)
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtCore import Qt
 from app.utils.ui_utils import SortableTableWidgetItem
 from app.controllers.analysis_engine import AnalysisEngine
 import os
+from datetime import datetime
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+import matplotlib.dates as mdates
 
 class HistoryDialog(QDialog):
     def __init__(self, product, supplier, history_data):
@@ -168,6 +173,103 @@ class HistoryDialog(QDialog):
         self.apply_filters()
         self.sync_filters_layout() # Sincronizza dopo popolamento (importante se ResizeToContents)
 
+class VisualReportDialog(QDialog):
+    """Dialogo per mostrare un grafico temporale dell'andamento dei prezzi di un articolo."""
+    def __init__(self, product, supplier, history_data, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Grafico Storico Prezzi: {product}")
+        self.resize(850, 600)
+        
+        layout = QVBoxLayout(self)
+        
+        # Info header
+        product_info = f"<h3>Andamento Prezzi Articolo</h3><b>Articolo/Codice:</b> {product}<br><b>Fornitore:</b> {supplier}"
+        if history_data and history_data[0].get('CodiceCliente'):
+            product_info += f" | <b>Cod. Cliente:</b> {history_data[0]['CodiceCliente']}"
+        
+        lbl_info = QLabel(product_info)
+        lbl_info.setTextFormat(Qt.TextFormat.RichText)
+        lbl_info.setStyleSheet("font-size: 13px; padding-bottom: 5px;")
+        layout.addWidget(lbl_info)
+        
+        # Matplotlib Figure & Canvas
+        self.figure = Figure(figsize=(8, 5.5), dpi=100)
+        self.canvas = FigureCanvas(self.figure)
+        layout.addWidget(self.canvas)
+        
+        # Pulsante Chiudi
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        btn_close = QPushButton("Chiudi")
+        btn_close.setFixedWidth(120)
+        btn_close.setFixedHeight(36)
+        btn_close.clicked.connect(self.close)
+        btn_layout.addWidget(btn_close)
+        layout.addLayout(btn_layout)
+        
+        self.plot_history(history_data)
+
+    def plot_history(self, history_data):
+        if not history_data:
+            return
+            
+        # Ordina cronologicamente
+        sorted_history = sorted(history_data, key=lambda x: x['Data'])
+        
+        dates = []
+        prices = []
+        quantities = []
+        
+        for row in sorted_history:
+            try:
+                d = datetime.strptime(row['Data'], '%Y-%m-%d')
+                dates.append(d)
+                prices.append(row['Prezzo'])
+                quantities.append(row['Quantità'])
+            except Exception as e:
+                print(f"Errore parsing riga storico: {e}")
+                
+        if not dates:
+            return
+            
+        ax = self.figure.add_subplot(111)
+        
+        # Plot prezzi come linea con marcatori
+        ax.plot(dates, prices, marker='o', markersize=6, color='#1976D2', linewidth=2.5, label='Prezzo Unitario (€)')
+        
+        # Annotazioni per ciascun punto
+        for i, (date_val, price_val) in enumerate(zip(dates, prices)):
+            qty = quantities[i]
+            ax.annotate(f"€{price_val:.2f}\n(q.tà: {qty:.0f})", 
+                        (date_val, price_val), 
+                        textcoords="offset points", 
+                        xytext=(0, 10), 
+                        ha='center', 
+                        fontsize=8, 
+                        fontweight='bold',
+                        bbox=dict(boxstyle="round,pad=0.3", fc="#E3F2FD", ec="#90CAF9", lw=0.7, alpha=0.9))
+        
+        # Linea della media
+        avg_price = sum(prices) / len(prices)
+        ax.axhline(avg_price, color='#D32F2F', linestyle='--', linewidth=1.5, label=f'Media: €{avg_price:.2f}')
+        
+        # Estetica assi
+        ax.set_title("Storico Prezzi d'Acquisto nel Tempo", fontsize=13, fontweight='bold', pad=15)
+        ax.set_xlabel("Data d'Acquisto", fontsize=10, labelpad=8)
+        ax.set_ylabel("Prezzo Unitario (€)", fontsize=10, labelpad=8)
+        
+        # Formattazione asse X (Date)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        self.figure.autofmt_xdate()
+        
+        ax.grid(True, linestyle=':', alpha=0.6)
+        ax.legend(loc='best', frameon=True, facecolor='#ffffff', edgecolor='#cccccc')
+        
+        # Imposta margini corretti
+        self.figure.tight_layout()
+        self.canvas.draw()
+
 class AnalysisWidget(QWidget):
     def __init__(self, controller):
         super().__init__()
@@ -184,14 +286,21 @@ class AnalysisWidget(QWidget):
         title.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         header_layout.addWidget(title)
         
+        self.btn_chart = QPushButton("Mostra Grafico Prezzi")
+        self.btn_chart.setEnabled(False)
+        self.btn_chart.clicked.connect(self.show_visual_report)
+        self.btn_chart.setCursor(Qt.CursorShape.PointingHandCursor)
+        header_layout.addWidget(self.btn_chart)
+        
         btn_refresh = QPushButton("Aggiorna Analisi")
         btn_refresh.clicked.connect(self.refresh_data)
+        btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         header_layout.addWidget(btn_refresh)
         
         layout.addLayout(header_layout)
         
         # Hints
-        lbl_hint = QLabel("Doppio click su una riga per vedere lo storico dettagliato delle fatture.")
+        lbl_hint = QLabel("Doppio click su una riga per lo storico dettagliato. Seleziona una riga e premi 'Mostra Grafico Prezzi' per il report visivo.")
         lbl_hint.setStyleSheet("color: gray; font-style: italic;")
         layout.addWidget(lbl_hint)
         
@@ -199,10 +308,11 @@ class AnalysisWidget(QWidget):
         global_filters_layout = QHBoxLayout()
         
         global_filters_layout.addWidget(QLabel("Fornitore:"))
-        self.filter_supplier_global = QLineEdit()
-        self.filter_supplier_global.setPlaceholderText("Cerca fornitore...")
-        self.filter_supplier_global.setClearButtonEnabled(True)
-        self.filter_supplier_global.textChanged.connect(self.apply_filters)
+        self.filter_supplier_global = QComboBox()
+        self.filter_supplier_global.setFixedHeight(36)
+        self.filter_supplier_global.setMinimumWidth(220)
+        self.filter_supplier_global.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.filter_supplier_global.currentTextChanged.connect(self.apply_filters)
         global_filters_layout.addWidget(self.filter_supplier_global)
         
         global_filters_layout.addSpacing(20)
@@ -251,6 +361,7 @@ class AnalysisWidget(QWidget):
         
         self.table.setSortingEnabled(True)
         self.table.cellDoubleClicked.connect(self.show_history)
+        self.table.itemSelectionChanged.connect(self.on_selection_changed)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers) # Read only
         layout.addWidget(self.table)
         
@@ -298,7 +409,9 @@ class AnalysisWidget(QWidget):
 
     def apply_filters(self):
         # Valori filtri globali
-        supp_glob = self.filter_supplier_global.text().lower()
+        supp_glob = self.filter_supplier_global.currentText().lower()
+        if supp_glob == "tutti i fornitori":
+            supp_glob = ""
         prod_glob = self.filter_product_global.text().lower()
         
         for row in range(self.table.rowCount()):
@@ -310,10 +423,13 @@ class AnalysisWidget(QWidget):
                 if not item or supp_glob not in item.text().lower():
                     match = False
             
-            # 2. Controllo Filtro Globale Prodotto (Colonna 0)
+            # 2. Controllo Filtro Globale Prodotto (Colonna 0 o Colonna 1)
             if match and prod_glob:
-                item = self.table.item(row, 0)
-                if not item or prod_glob not in item.text().lower():
+                item_code = self.table.item(row, 0)
+                item_cust = self.table.item(row, 1)
+                code_txt = item_code.text().lower() if item_code else ""
+                cust_txt = item_cust.text().lower() if item_cust else ""
+                if prod_glob not in code_txt and prod_glob not in cust_txt:
                     match = False
             
             # 3. Controllo Filtri di Colonna
@@ -328,6 +444,30 @@ class AnalysisWidget(QWidget):
                             
             self.table.setRowHidden(row, not match)
             
+    def on_selection_changed(self):
+        # Abilita il pulsante se c'è almeno una riga selezionata
+        selected = self.table.selectedItems()
+        self.btn_chart.setEnabled(len(selected) > 0)
+            
+    def show_visual_report(self):
+        selected_ranges = self.table.selectedRanges()
+        if not selected_ranges:
+            return
+        row = selected_ranges[0].topRow()
+        
+        # Prendi i dati della riga selezionata (Colonna 0: Prodotto, Colonna 3: Fornitore)
+        product_item = self.table.item(row, 0)
+        supplier_item = self.table.item(row, 3)
+        
+        if product_item and supplier_item:
+            product_name = product_item.text()
+            supplier_name = supplier_item.text()
+            
+            history = self.engine.get_product_history(product_name, supplier_name)
+            
+            dlg = VisualReportDialog(product_name, supplier_name, history, parent=self)
+            dlg.exec()
+            
     def show_history(self, row, col):
         product_name = self.table.item(row, 0).text()
         # Fornitore è ora alla colonna 3
@@ -341,6 +481,25 @@ class AnalysisWidget(QWidget):
     def refresh_data(self):
         self.table.setSortingEnabled(False)
         data = self.engine.get_price_trends()
+        
+        # Ordina per variazione percentuale assoluta decrescente
+        data = sorted(data, key=lambda x: abs(x['Var. %']), reverse=True)
+        
+        # Popola il combobox dei fornitori
+        suppliers = sorted(list(set(row_data['Fornitore'] for row_data in data)))
+        
+        self.filter_supplier_global.blockSignals(True)
+        current_selection = self.filter_supplier_global.currentText()
+        self.filter_supplier_global.clear()
+        self.filter_supplier_global.addItem("Tutti i fornitori")
+        self.filter_supplier_global.addItems(suppliers)
+        
+        idx = self.filter_supplier_global.findText(current_selection)
+        if idx >= 0:
+            self.filter_supplier_global.setCurrentIndex(idx)
+        else:
+            self.filter_supplier_global.setCurrentIndex(0)
+        self.filter_supplier_global.blockSignals(False)
         
         self.table.setRowCount(0)
         

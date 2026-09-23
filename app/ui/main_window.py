@@ -1,81 +1,230 @@
-from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QToolBar, 
-                             QStatusBar, QStackedWidget)
-from PyQt6.QtGui import QAction, QIcon
+from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+                             QPushButton, QStatusBar, QStackedWidget, QLabel, QFrame, 
+                             QButtonGroup, QMessageBox)
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtGui import QFont, QIcon
+
 from .dashboard import DashboardWidget
 from .import_dialog import ImportDialog
 from .analysis import AnalysisWidget 
 from .reports import ReportWidget
 from .article_search import ArticleSearchWidget
+from .customers_view import CustomersWidget
+from .suppliers_view import SuppliersWidget
+from .products_view import ProductsWidget
+from .work_orders_view import WorkOrdersWidget
+from .ai_assistant_view import AIAssistantWidget
+from .exploded_diagrams_view import ExplodedDiagramsWidget
 
 class MainWindow(QMainWindow):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
         
-        self.setWindowTitle("Analisi Costi Fatture")
-        self.resize(1200, 800)
+        self.setWindowTitle("Gestionale Angeleri - Officina Meccanica")
+        self.resize(1380, 860)
+        self._open_invoice_windows = {}
         
         self.init_ui()
         
     def init_ui(self):
-        # Toolbar
-        toolbar = QToolBar("Main Toolbar")
-        self.addToolBar(toolbar)
-        
-        act_dashboard = QAction("Dashboard", self)
-        act_dashboard.triggered.connect(lambda: self.switch_view(0))
-        toolbar.addAction(act_dashboard)
-        
-        act_analysis = QAction("Analisi Prezzi", self)
-        act_analysis.triggered.connect(lambda: self.switch_view(1))
-        toolbar.addAction(act_analysis)
-        
-        # New Action for Article Search
-        act_search = QAction("Ricerca Articoli", self)
-        act_search.triggered.connect(lambda: self.switch_view(3))
-        toolbar.addAction(act_search)
-        
-        act_reports = QAction("Report", self)
-        act_reports.triggered.connect(lambda: self.switch_view(2))
-        toolbar.addAction(act_reports)
-        
-        toolbar.addSeparator()
+        main_container = QWidget()
+        main_layout = QHBoxLayout(main_container)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        self.setCentralWidget(main_container)
 
-        act_import = QAction("Importa", self)
-        act_import.triggered.connect(self.show_import_dialog)
-        toolbar.addAction(act_import)
+        # ====================================================
+        # SIDEBAR LATERALE (STILE GESTIONALE MODERNO)
+        # ====================================================
+        sidebar = QWidget()
+        sidebar.setFixedWidth(240)
+        sidebar.setStyleSheet("""
+            QWidget {
+                background-color: #1E293B;
+                color: #F8FAFC;
+            }
+            QPushButton {
+                background-color: transparent;
+                color: #CBD5E1;
+                font-size: 13px;
+                font-weight: 500;
+                text-align: left;
+                padding-left: 18px;
+                height: 42px;
+                border: none;
+                border-radius: 6px;
+                margin: 2px 8px;
+            }
+            QPushButton:hover {
+                background-color: #334155;
+                color: #FFFFFF;
+            }
+            QPushButton:checked {
+                background-color: #0284C7;
+                color: #FFFFFF;
+                font-weight: bold;
+            }
+        """)
         
-        act_refresh = QAction("Aggiorna Dati", self)
-        act_refresh.triggered.connect(self.refresh_current_view)
-        toolbar.addAction(act_refresh)
-        
-        toolbar.addSeparator()
-        
-        act_change_db = QAction("Cambia Database", self)
-        act_change_db.triggered.connect(self.change_database)
-        toolbar.addAction(act_change_db)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 15, 0, 15)
+        sidebar_layout.setSpacing(4)
 
-        # Central Widget (Stacked)
+        # Header Logo / Azienda
+        header_box = QVBoxLayout()
+        header_box.setContentsMargins(20, 10, 20, 20)
+        lbl_brand = QLabel("OFFICINA ANGELERI")
+        lbl_brand.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        lbl_brand.setStyleSheet("color: #38BDF8; letter-spacing: 1px;")
+        
+        lbl_sub = QLabel("Gestionale & Ricambi")
+        lbl_sub.setFont(QFont("Arial", 10))
+        lbl_sub.setStyleSheet("color: #94A3B8;")
+        
+        header_box.addWidget(lbl_brand)
+        header_box.addWidget(lbl_sub)
+        sidebar_layout.addLayout(header_box)
+
+        # Separatore
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.Shape.HLine)
+        sep1.setStyleSheet("color: #334155; margin-bottom: 10px;")
+        sidebar_layout.addWidget(sep1)
+
+        # Gruppo Bottoni Navigazione
+        self.nav_group = QButtonGroup(self)
+        self.nav_group.setExclusive(True)
+
+        self.btn_nav_dash = QPushButton("📊  Dashboard")
+        self.btn_nav_dash.setCheckable(True)
+        self.btn_nav_dash.setChecked(True)
+        self.btn_nav_dash.clicked.connect(lambda: self.switch_view(0))
+        self.nav_group.addButton(self.btn_nav_dash)
+        sidebar_layout.addWidget(self.btn_nav_dash)
+
+        self.btn_nav_cust = QPushButton("👥  Clienti")
+        self.btn_nav_cust.setCheckable(True)
+        self.btn_nav_cust.clicked.connect(lambda: self.switch_view(1))
+        self.nav_group.addButton(self.btn_nav_cust)
+        sidebar_layout.addWidget(self.btn_nav_cust)
+
+        self.btn_nav_supp = QPushButton("🏭  Fornitori")
+        self.btn_nav_supp.setCheckable(True)
+        self.btn_nav_supp.clicked.connect(lambda: self.switch_view(2))
+        self.nav_group.addButton(self.btn_nav_supp)
+        sidebar_layout.addWidget(self.btn_nav_supp)
+
+        self.btn_nav_prod = QPushButton("⚙️  Catalogo Ricambi")
+        self.btn_nav_prod.setCheckable(True)
+        self.btn_nav_prod.clicked.connect(lambda: self.switch_view(3))
+        self.nav_group.addButton(self.btn_nav_prod)
+        sidebar_layout.addWidget(self.btn_nav_prod)
+
+        self.btn_nav_work = QPushButton("🛠️  Commesse Officina")
+        self.btn_nav_work.setCheckable(True)
+        self.btn_nav_work.clicked.connect(lambda: self.switch_view(4))
+        self.nav_group.addButton(self.btn_nav_work)
+        sidebar_layout.addWidget(self.btn_nav_work)
+
+        self.btn_nav_search = QPushButton("🔍  Ricerca Ricambi 360°")
+        self.btn_nav_search.setCheckable(True)
+        self.btn_nav_search.clicked.connect(lambda: self.switch_view(5))
+        self.nav_group.addButton(self.btn_nav_search)
+        sidebar_layout.addWidget(self.btn_nav_search)
+
+        self.btn_nav_rep = QPushButton("📈  Analisi & Report")
+        self.btn_nav_rep.setCheckable(True)
+        self.btn_nav_rep.clicked.connect(lambda: self.switch_view(6))
+        self.nav_group.addButton(self.btn_nav_rep)
+        sidebar_layout.addWidget(self.btn_nav_rep)
+
+        self.btn_nav_diagrams = QPushButton("📖  Esplosi Macchine")
+        self.btn_nav_diagrams.setCheckable(True)
+        self.btn_nav_diagrams.clicked.connect(lambda: self.switch_view(7))
+        self.nav_group.addButton(self.btn_nav_diagrams)
+        sidebar_layout.addWidget(self.btn_nav_diagrams)
+
+        self.btn_nav_ai = QPushButton("🤖  Assistente AI")
+        self.btn_nav_ai.setCheckable(True)
+        self.btn_nav_ai.clicked.connect(lambda: self.switch_view(8))
+        self.nav_group.addButton(self.btn_nav_ai)
+        sidebar_layout.addWidget(self.btn_nav_ai)
+
+        sidebar_layout.addStretch()
+
+        # Separatore inferiore
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet("color: #334155; margin: 10px 0;")
+        sidebar_layout.addWidget(sep2)
+
+        # Pulsanti Utility in basso
+        btn_import = QPushButton("📥  Importa Fatture XML")
+        btn_import.setStyleSheet("font-size: 12px; color: #94A3B8;")
+        btn_import.clicked.connect(self.show_import_dialog)
+        sidebar_layout.addWidget(btn_import)
+
+        btn_refresh = QPushButton("🔄  Aggiorna Dati")
+        btn_refresh.setStyleSheet("font-size: 12px; color: #94A3B8;")
+        btn_refresh.clicked.connect(self.refresh_current_view)
+        sidebar_layout.addWidget(btn_refresh)
+
+        btn_db = QPushButton("💾  Database (Synology)")
+        btn_db.setStyleSheet("font-size: 12px; color: #94A3B8;")
+        btn_db.clicked.connect(self.change_database)
+        sidebar_layout.addWidget(btn_db)
+
+        main_layout.addWidget(sidebar)
+
+        # ====================================================
+        # AREA CENTRALE: QStackedWidget (Pagine Applicazione)
+        # ====================================================
         self.central_stack = QStackedWidget()
-        self.setCentralWidget(self.central_stack)
-        
-        # Views
+        self.central_stack.setStyleSheet("background-color: #FFFFFF;")
+        main_layout.addWidget(self.central_stack)
+
+        # 0: Dashboard
         self.dashboard = DashboardWidget(self.controller)
         self.central_stack.addWidget(self.dashboard)
-        
-        self.analysis = AnalysisWidget(self.controller)
-        self.central_stack.addWidget(self.analysis)
-        
+
+        # 1: Clienti
+        self.customers_view = CustomersWidget(self.controller, self)
+        self.central_stack.addWidget(self.customers_view)
+
+        # 2: Fornitori
+        self.suppliers_view = SuppliersWidget(self.controller, self)
+        self.central_stack.addWidget(self.suppliers_view)
+
+        # 3: Catalogo Ricambi
+        self.products_view = ProductsWidget(self.controller, self)
+        self.central_stack.addWidget(self.products_view)
+
+        # 4: Commesse Officina
+        self.work_orders_view = WorkOrdersWidget(self.controller, self)
+        self.central_stack.addWidget(self.work_orders_view)
+
+        # 5: Ricerca Ricambi 360° & Vocale
+        self.article_search = ArticleSearchWidget(self.controller, self)
+        self.central_stack.addWidget(self.article_search)
+
+        # 6: Report & Analisi Prezzi
         self.reports = ReportWidget(self.controller)
         self.central_stack.addWidget(self.reports)
 
-        # View 3: Article Search
-        self.article_search = ArticleSearchWidget(self.controller, self)
-        self.central_stack.addWidget(self.article_search)
-        
+        # 7: Esplosi Macchine & Distinte PDF
+        self.exploded_diagrams_view = ExplodedDiagramsWidget(self.controller, self)
+        self.central_stack.addWidget(self.exploded_diagrams_view)
+
+        # 8: Assistente AI Gemini
+        self.ai_assistant_view = AIAssistantWidget(self.controller, self)
+        self.central_stack.addWidget(self.ai_assistant_view)
+
+        # Status Bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        
+        self.status_bar.showMessage("Connesso al server Synology DS920+ (angeleri_db)")
+
     def switch_view(self, index):
         self.central_stack.setCurrentIndex(index)
         self.refresh_current_view()
@@ -84,33 +233,85 @@ class MainWindow(QMainWindow):
         dlg = ImportDialog(self.controller, self)
         if dlg.exec():
             self.refresh_current_view()
-            
+
     def refresh_current_view(self):
         current = self.central_stack.currentWidget()
         if hasattr(current, 'refresh_data'):
             current.refresh_data()
-        self.status_bar.showMessage("Dati aggiornati.")
+        self.status_bar.showMessage("Dati aggiornati dal server Synology.")
 
-    def show_invoice_detail_by_id(self, invoice_id: int):
-        """Apre il dialogo dettaglio fattura dalla ricerca articoli."""
+    def show_invoice_detail(self, invoice_id: int = None, invoice_type: str = "auto", invoice_number: str = None, invoice_year: int = None):
+        """
+        Apre una finestra di dettaglio fattura autonoma e NON MODALE.
+        Consente di visualizzare la fattura senza bloccare la schermata principale,
+        lasciando intatti e sempre visibili i risultati di ricerca o la conversazione dell'assistente AI.
+        Permette anche di aprire e confrontare più fatture contemporaneamente a schermo.
+        """
         from .invoice_detail import InvoiceDetailDialog
-        dlg = InvoiceDetailDialog(invoice_id, parent=self)
-        dlg.exec()
+        if not hasattr(self, '_open_invoice_windows'):
+            self._open_invoice_windows = {}
+
+        key = f"{invoice_type}_{invoice_number}_{invoice_year}_{invoice_id}"
         
-    def change_database(self):
-        from PyQt6.QtWidgets import QMessageBox
-        from app.utils.settings import SettingsManager
-        import sys
-        import os
-        
-        reply = QMessageBox.question(
-            self, "Cambia Database", 
-            "L'applicazione verrà riavviata per permetterti di selezionare un nuovo file database. Continuare?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        # Se già aperta, portala semplicemente in primo piano
+        if key in self._open_invoice_windows and self._open_invoice_windows[key] is not None:
+            existing_dlg = self._open_invoice_windows[key]
+            try:
+                existing_dlg.show()
+                existing_dlg.raise_()
+                existing_dlg.activateWindow()
+                return existing_dlg
+            except RuntimeError:
+                del self._open_invoice_windows[key]
+
+        # IMPORTANTE: parent=None per evitare che Qt minimizzi/nasconda la MainWindow
+        # quando questa finestra viene chiusa. La teniamo in vita manualmente nel dizionario.
+        dlg = InvoiceDetailDialog(
+            invoice_id=invoice_id,
+            invoice_type=invoice_type,
+            invoice_number=invoice_number,
+            invoice_year=invoice_year,
+            parent=None
         )
         
+        # Posiziona leggermente sfalsata rispetto alla MainWindow per non coprirla completamente
+        try:
+            geo = self.geometry()
+            offset = 35 * (len(self._open_invoice_windows) % 4)
+            dlg.move(geo.x() + 90 + offset, geo.y() + 60 + offset)
+        except Exception:
+            pass
+
+        def on_closed():
+            self._open_invoice_windows.pop(key, None)
+            # Riporta la MainWindow in primo piano senza interferire con la logica interna
+            try:
+                self.raise_()
+                self.activateWindow()
+            except Exception:
+                pass
+        dlg.destroyed.connect(on_closed)
+
+        self._open_invoice_windows[key] = dlg
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        return dlg
+
+    def show_invoice_detail_by_id(self, invoice_id: int = None, invoice_type: str = "auto", invoice_number: str = None, invoice_year: int = None):
+        return self.show_invoice_detail(invoice_id=invoice_id, invoice_type=invoice_type, invoice_number=invoice_number, invoice_year=invoice_year)
+
+    def change_database(self):
+        import sys
+        import os
+        from app.utils.settings import SettingsManager
+        
+        reply = QMessageBox.question(
+            self, "Configurazione Database", 
+            "Vuoi aprire la schermata per cambiare o verificare la connessione al database Synology?\nL'applicazione si riavvierà.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
         if reply == QMessageBox.StandardButton.Yes:
             settings = SettingsManager()
             settings.set_remember_db(False) 
-            # Riavvia il processo corrente
             os.execl(sys.executable, sys.executable, *sys.argv)

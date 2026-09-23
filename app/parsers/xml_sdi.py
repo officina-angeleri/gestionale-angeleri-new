@@ -51,20 +51,32 @@ class XMLSDIInvoiceParser(InvoiceParser):
 
         invoices = []
         
-        # Header (Denominazione Cedente)
+        # Header (Denominazione Cedente e P.IVA)
         header = find_tag(root, 'FatturaElettronicaHeader')
         supplier_name = "Sconosciuto"
+        supplier_piva = ""
         if header is not None:
             cedente = find_tag(header, 'CedentePrestatore')
             if cedente is not None:
+                # Estrazione P.IVA o Codice Fiscale
+                id_codice = find_tag(cedente, 'DatiAnagrafici/IdFiscaleIVA/IdCodice')
+                if id_codice is not None and id_codice.text:
+                    supplier_piva = id_codice.text.strip()
+                if not supplier_piva:
+                    cf = find_tag(cedente, 'DatiAnagrafici/CodiceFiscale')
+                    if cf is not None and cf.text:
+                        supplier_piva = cf.text.strip()
+
                 denom = find_tag(cedente, 'DatiAnagrafici/Anagrafica/Denominazione')
-                if denom is not None:
-                    supplier_name = denom.text.strip()
+                if denom is not None and denom.text:
+                    supplier_name = " ".join(denom.text.split())
                 else:
                     nome = find_tag(cedente, 'DatiAnagrafici/Anagrafica/Nome')
                     cognome = find_tag(cedente, 'DatiAnagrafici/Anagrafica/Cognome')
                     if nome is not None and cognome is not None:
-                        supplier_name = f"{nome.text.strip()} {cognome.text.strip()}"
+                        n_str = nome.text.strip() if nome.text else ""
+                        c_str = cognome.text.strip() if cognome.text else ""
+                        supplier_name = " ".join(f"{n_str} {c_str}".split())
 
         bodies = find_all_tags(root, 'FatturaElettronicaBody')
         for body in bodies:
@@ -199,7 +211,8 @@ class XMLSDIInvoiceParser(InvoiceParser):
                 number=number,
                 total_amount=total_amount or sum(i.total_price for i in items),
                 items=items,
-                original_file_path=file_path
+                original_file_path=file_path,
+                supplier_piva=supplier_piva
             ))
             
         return invoices

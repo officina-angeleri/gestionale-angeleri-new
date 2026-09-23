@@ -5,5 +5,9 @@ beautifulsoup4
 lxml
 matplotlib
 pdfplumber
+pypdfium2
 openpyxl
 pyinstaller
+psycopg2-binary
+google-genai
+SpeechRecognition

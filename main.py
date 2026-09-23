@@ -26,13 +26,13 @@ def main():
         else:
             sys.exit(0)
             
-    # Verifica che il percorso sia nel formato  sqlite://
-    if db_path and not db_path.startswith("sqlite:///"):
-        # Se è un percorso assoluto Windows (es. C:\), servono 3 slash o 4 se su driver differente?
-        # Solitamente sqlite:///C:/percorso/file.db funziona.
+    # Verifica il tipo di connessione (PostgreSQL o SQLite)
+    if db_path and (db_path.startswith("postgresql://") or db_path.startswith("postgresql+psycopg2://")):
+        connection_string = db_path
+    elif db_path and not db_path.startswith("sqlite:///"):
         connection_string = f"sqlite:///{os.path.abspath(db_path).replace('\\', '/')}"
     else:
-        connection_string = db_path or "sqlite:///invoices.db"
+        connection_string = db_path or "postgresql+psycopg2://angeleri:AngeleriPassword2026!@192.168.1.38:5433/angeleri_db"
 
     # Setup DB
     init_db(connection_string)

@@ -20,6 +20,7 @@ class ParsedInvoice:
     total_amount: float # Some invoices might not explicitly have it, but we can sum items
     items: List[ParsedInvoiceItem]
     original_file_path: str
+    supplier_piva: str = ""
 
 class InvoiceParser(ABC):
     

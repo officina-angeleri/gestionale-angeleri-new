@@ -36,13 +36,18 @@ class HTMLInvoiceParser(InvoiceParser):
         # --- Fornitore ---
         supplier_block = soup.find('div', id='cedente')
         supplier_name = "Sconosciuto"
+        supplier_piva = ""
         if supplier_block:
             for li in supplier_block.find_all('li'):
-                if "Denominazione" in li.get_text():
+                text = li.get_text()
+                if "Denominazione" in text:
                     span = li.find('span')
                     if span:
                         supplier_name = self.clean_text(span.get_text())
-                        break
+                elif "Identificativo fiscale" in text or "Codice Fiscale" in text:
+                    span = li.find('span')
+                    if span and not supplier_piva:
+                        supplier_piva = self.clean_text(span.get_text()).replace("IT", "").strip()
         
         # --- Testata ---
         doc_general_block = soup.find('div', id='dati-generali-documento')
@@ -180,5 +185,6 @@ class HTMLInvoiceParser(InvoiceParser):
             number=doc_number,
             total_amount=total_amount,
             items=parsed_items,
-            original_file_path=file_path
+            original_file_path=file_path,
+            supplier_piva=supplier_piva
         )]

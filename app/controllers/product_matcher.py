@@ -24,7 +24,11 @@ class ProductMatcher:
         # 2. Exact Match by Supplier Code only
         if code:
             existing = self.session.query(Product).filter_by(code=code).first()
-            if existing: return existing
+            if existing:
+                if customer_code and not existing.customer_code:
+                    existing.customer_code = customer_code
+                    self.session.flush()
+                return existing
 
         # 3. Create new
         # Se abbiamo il codice tecnico, usiamolo come NOME per la visualizzazione tabellare (richiesta utente)
