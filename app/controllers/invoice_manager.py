@@ -487,13 +487,139 @@ class InvoiceManager:
                         .order_by(SalesInvoice.date.desc())
                         .limit(10).all())
 
+        from app.database import ProductMaterial, ProductOperation
+        materials = (self.session.query(ProductMaterial)
+                     .filter_by(product_id=prod.id)
+                     .order_by(ProductMaterial.line_num)
+                     .all())
+        operations = (self.session.query(ProductOperation)
+                      .filter_by(product_id=prod.id)
+                      .order_by(ProductOperation.sequence)
+                      .all())
+
         return {
             'product': prod,
             'legacy_codes': legacy_codes,
             'supplier_products': supplier_products,
             'recent_purchases': recent_purchases,
-            'recent_sales': recent_sales
+            'recent_sales': recent_sales,
+            'materials': materials,
+            'operations': operations
         }
+
+    def calculate_raw_material_cut(self, product_code: str, length_mm: float) -> dict:
+        """
+        Calcola il costo di uno spezzone di materiale commerciale (es. barra di ottone/alluminio/acciaio).
+        Lunghezza in mm -> convertita in metri -> moltiplicata per fattore di conversione (kg/m) -> peso in kg -> moltiplicato per costo al kg.
+        """
+        from app.database import Product, InvoiceItem, Invoice
+        clean = product_code.strip()
+        prod = self.session.query(Product).filter(Product.code.ilike(clean)).first()
+        if not prod:
+            return {"error": f"Articolo non trovato: {product_code}"}
+
+        conv = float(prod.conversion_factor or 1.0)
+        length_m = float(length_mm) / 1000.0
+        weight_kg = length_m * conv
+
+        last_item = (self.session.query(InvoiceItem)
+                     .join(Invoice)
+                     .filter(InvoiceItem.product_id == prod.id, InvoiceItem.unit_price > 0)
+                     .order_by(Invoice.date.desc())
+                     .first())
+        price_per_kg = float(last_item.unit_price) if last_item else float(prod.production_cost or 0.0)
+        total_cost = weight_kg * price_per_kg
+
+        return {
+            "code": prod.code,
+            "name": prod.name,
+            "length_mm": length_mm,
+            "length_m": length_m,
+            "conversion_factor": conv,
+            "weight_kg": round(weight_kg, 4),
+            "purchase_um": prod.purchase_um or "KG",
+            "warehouse_um": prod.unit_measure or "MT",
+            "price_per_kg": round(price_per_kg, 4),
+            "total_cost": round(total_cost, 2),
+            "price_source": f"Fattura {last_item.invoice.number} del {last_item.invoice.date.strftime('%d/%m/%Y')}" if last_item else "Costo standard interno"
+        }
+
+    def calculate_production_piece_cost(self, product_code: str) -> dict:
+        """
+        Calcola il costo totale di produzione per un pezzo (Distinta Materiali + Ciclo Lavorazioni).
+        """
+        from app.database import Product, ProductMaterial, ProductOperation, InvoiceItem
+        clean = product_code.strip()
+        prod = self.session.query(Product).filter(Product.code.ilike(clean)).first()
+        if not prod:
+            return {"error": f"Articolo non trovato: {product_code}"}
+
+        materials = self.session.query(ProductMaterial).filter_by(product_id=prod.id).order_by(ProductMaterial.line_num).all()
+        operations = self.session.query(ProductOperation).filter_by(product_id=prod.id).order_by(ProductOperation.sequence).all()
+
+        mat_breakdown = []
+        tot_materials_cost = 0.0
+        for m in materials:
+            unit_c = float(m.unit_cost or 0.0)
+            if unit_c == 0 and m.component_product:
+                last_p = (self.session.query(InvoiceItem)
+                          .filter(InvoiceItem.product_id == m.component_product_id, InvoiceItem.unit_price > 0)
+                          .order_by(InvoiceItem.id.desc()).first())
+                if last_p:
+                    unit_c = float(last_p.unit_price)
+
+            subtot = float(m.quantity or 1.0) * unit_c
+            tot_materials_cost += subtot
+            mat_breakdown.append({
+                "line": m.line_num,
+                "code": m.component_code,
+                "description": m.description,
+                "quantity": m.quantity,
+                "um": m.unit_measure,
+                "unit_cost": unit_c,
+                "total_cost": round(subtot, 2)
+            })
+
+        ops_breakdown = []
+        tot_ops_cost = 0.0
+        tot_run_hours = 0.0
+        tot_setup_hours = 0.0
+
+        for op in operations:
+            run_h = float(op.operation_hours or 0.0)
+            set_h = float(op.setup_hours or 0.0)
+            rate = float(op.hourly_rate or 0.0)
+            line_cost = (run_h + set_h) * rate
+            tot_ops_cost += line_cost
+            tot_run_hours += run_h
+            tot_setup_hours += set_h
+            ops_breakdown.append({
+                "sequence": op.sequence,
+                "phase": op.phase_code,
+                "description": op.description,
+                "setup_hours": set_h,
+                "run_hours": run_h,
+                "rate": rate,
+                "total_cost": round(line_cost, 2)
+            })
+
+        total_production_cost = tot_materials_cost + tot_ops_cost
+
+        return {
+            "code": prod.code,
+            "name": prod.name,
+            "type": prod.type,
+            "materials": mat_breakdown,
+            "total_materials_cost": round(tot_materials_cost, 2),
+            "operations": ops_breakdown,
+            "total_setup_hours": round(tot_setup_hours, 2),
+            "total_run_hours": round(tot_run_hours, 2),
+            "total_operations_cost": round(tot_ops_cost, 2),
+            "total_production_cost": round(total_production_cost, 2),
+            "catalog_std_cost": float(prod.production_cost or 0.0),
+            "catalog_list_price": float(prod.list_price or 0.0)
+        }
+
 
     # ==========================================
     # GESTIONE ANAGRAFICA CLIENTI

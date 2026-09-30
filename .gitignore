@@ -49,3 +49,7 @@ cleanup_*.py
 binder_text.txt
 invoice_parser.py
 build_local.py
+*.har
+scripts/inspect_samples.py
+scripts/test_*.py
+scripts/check_*.py

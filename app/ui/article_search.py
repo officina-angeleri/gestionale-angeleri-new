@@ -129,11 +129,16 @@ class ArticleSearchWidget(QWidget):
         self.layout_diagrams_btns.setContentsMargins(0, 0, 0, 0)
         self.layout_diagrams_btns.setSpacing(8)
         self.box_360_layout.addWidget(self.widget_diagrams_container, 3, 1, 1, 3)
+
+        # Riga 4: Dati Produzione / Conversione / Disegno B-Kode
+        self.lbl_art_bkode = QLabel("Produzione & Conversione B-Kode: -")
+        self.lbl_art_bkode.setStyleSheet("color: #4527A0; font-weight: bold;")
+        self.box_360_layout.addWidget(self.lbl_art_bkode, 4, 0, 1, 4)
         
         self.box_360.setVisible(False) # Visibile solo quando c'è un riscontro
         layout.addWidget(self.box_360)
 
-        # Tabs Risultati: Acquisti Fornitori vs Vendite Clienti
+        # Tabs Risultati: Acquisti Fornitori vs Vendite Clienti vs Distinta Base / Produzione
         self.tabs = QTabWidget()
         
         # TAB 1: ACQUISTI FORNITORI
@@ -170,6 +175,75 @@ class ArticleSearchWidget(QWidget):
         self.table_sales.cellDoubleClicked.connect(self.handle_double_click_sales)
         tab_s_layout.addWidget(self.table_sales)
         self.tabs.addTab(self.tab_sales, "Storico Vendite Clienti (2019-2026)")
+
+        # TAB 3: PRODUZIONE & DISTINTA BASE (BOM) & CICLO LAVORAZIONI
+        self.tab_production = QWidget()
+        tab_prod_layout = QVBoxLayout(self.tab_production)
+
+        # Sezione Calcolatore Taglio Materiale (per articoli con fattore di conversione)
+        self.box_calc_material = QGroupBox("📏 Calcolatore Taglio Materiale Grezzo (Conversione Lunghezza ➔ Peso)")
+        self.box_calc_material.setStyleSheet(
+            "QGroupBox { font-weight: bold; border: 1px solid #90CAF9; border-radius: 6px; margin-top: 5px; padding: 10px; background-color: #E3F2FD; }"
+        )
+        calc_layout = QHBoxLayout(self.box_calc_material)
+        calc_layout.addWidget(QLabel("Lunghezza spezzone (mm):"))
+        self.input_cut_len = QLineEdit("200")
+        self.input_cut_len.setFixedWidth(90)
+        self.input_cut_len.setStyleSheet("font-weight: bold; font-size: 13px; padding: 4px; background-color: white; border: 1px solid #1976D2; border-radius: 3px;")
+        calc_layout.addWidget(self.input_cut_len)
+
+        self.btn_calc_cut = QPushButton("Calcola Costo Spezzone")
+        self.btn_calc_cut.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_calc_cut.setStyleSheet("background-color: #1976D2; color: white; font-weight: bold; padding: 5px 12px; border-radius: 4px;")
+        self.btn_calc_cut.clicked.connect(self._on_recalculate_cut)
+        calc_layout.addWidget(self.btn_calc_cut)
+
+        self.lbl_calc_result = QLabel("")
+        self.lbl_calc_result.setStyleSheet("font-weight: bold; color: #0D47A1; font-size: 13px; margin-left: 15px;")
+        calc_layout.addWidget(self.lbl_calc_result)
+        calc_layout.addStretch()
+        tab_prod_layout.addWidget(self.box_calc_material)
+
+        # Sezione Distinta Materiali (BOM)
+        lbl_bom_title = QLabel("🔩 Distinta Componenti & Materiali (BOM):")
+        lbl_bom_title.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        tab_prod_layout.addWidget(lbl_bom_title)
+
+        self.table_bom = QTableWidget()
+        self.table_bom.setColumnCount(7)
+        self.table_bom.setHorizontalHeaderLabels([
+            "Riga", "Cod. Componente", "Descrizione", "U.M.", "Q.tà", "Costo Unitario", "Totale Materiale"
+        ])
+        header_bom = self.table_bom.horizontalHeader()
+        header_bom.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header_bom.setStretchLastSection(True)
+        self.table_bom.setSortingEnabled(True)
+        tab_prod_layout.addWidget(self.table_bom)
+
+        # Sezione Ciclo Lavorazioni (Routing)
+        lbl_routing_title = QLabel("⚙️ Ciclo di Lavorazione & Fasi Macchina:")
+        lbl_routing_title.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        tab_prod_layout.addWidget(lbl_routing_title)
+
+        self.table_routing = QTableWidget()
+        self.table_routing.setColumnCount(7)
+        self.table_routing.setHorizontalHeaderLabels([
+            "Seq", "Cod. Fase", "Descrizione Lavorazione", "Ore Attrezzo", "Ore Macchina", "Tariffa €/h", "Totale Fase"
+        ])
+        header_rout = self.table_routing.horizontalHeader()
+        header_rout.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header_rout.setStretchLastSection(True)
+        self.table_routing.setSortingEnabled(True)
+        tab_prod_layout.addWidget(self.table_routing)
+
+        # Strip Riepilogo Costi Produzione
+        self.lbl_prod_cost_summary = QLabel("Seleziona o cerca un articolo per visualizzare i costi di produzione.")
+        self.lbl_prod_cost_summary.setStyleSheet(
+            "background-color: #263238; color: #ECEFF1; font-weight: bold; font-size: 13px; padding: 8px 12px; border-radius: 4px;"
+        )
+        tab_prod_layout.addWidget(self.lbl_prod_cost_summary)
+
+        self.tabs.addTab(self.tab_production, "Distinta Base & Lavorazioni (Produzione)")
 
         layout.addWidget(self.tabs)
         
@@ -299,6 +373,7 @@ class ArticleSearchWidget(QWidget):
         legacy_codes = p_data.get('legacy_codes', [])
         supp_prods = p_data.get('supplier_products', [])
 
+        self.current_product = prod
         self.lbl_art_master.setText(f"Codice Master: {prod.code}")
         self.lbl_art_desc.setText(f"Descrizione: {prod.name}")
         self.lbl_art_cat.setText(f"Tipo/Cat: {prod.type} / {prod.category or 'Standard'}")
@@ -318,6 +393,19 @@ class ArticleSearchWidget(QWidget):
             self.lbl_art_supp.setText(f"Fornitori Collegati ({len(supp_prods)}): {supp_str}")
         else:
             self.lbl_art_supp.setText("Fornitori Collegati: Nessuno")
+
+        # Riga 4: B-Kode / Conversione / Disegno
+        bkode_parts = []
+        if prod.bkode_id:
+            bkode_parts.append(f"ID B-Kode: {prod.bkode_id} ({prod.bkode_type or 'Std'})")
+        if prod.conversion_factor and prod.conversion_factor != 1.0:
+            bkode_parts.append(f"Fattore Conv: {prod.conversion_factor:.4f} {prod.unit_measure}/{prod.purchase_um or 'KG'}")
+        if prod.drawing_number:
+            bkode_parts.append(f"Disegno/Specifica: {prod.drawing_number}")
+        if prod.raw_material_class:
+            bkode_parts.append(f"Classe: {prod.raw_material_class}")
+        
+        self.lbl_art_bkode.setText(" | ".join(bkode_parts) if bkode_parts else "Dati B-Kode: Standard")
 
         # Pulisce vecchi bottoni esplosi
         while self.layout_diagrams_btns.count():
@@ -360,7 +448,104 @@ class ArticleSearchWidget(QWidget):
             self.layout_diagrams_btns.addWidget(lbl_none)
             self.layout_diagrams_btns.addStretch()
 
+        # Popola Distinta Base e Ciclo Lavorazioni nel Tab 3
+        materials = p_data.get('materials', [])
+        operations = p_data.get('operations', [])
+        self.display_production_data(prod, materials, operations)
+
         self.box_360.setVisible(True)
+
+    def _on_recalculate_cut(self):
+        if not hasattr(self, 'current_product') or not self.current_product:
+            return
+        prod = self.current_product
+        try:
+            length_mm = float(self.input_cut_len.text().replace(',', '.'))
+        except ValueError:
+            self.lbl_calc_result.setText("Inserire una lunghezza valida in mm.")
+            return
+
+        res = self.controller.calculate_raw_material_cut(prod.code, length_mm)
+        if "error" in res:
+            self.lbl_calc_result.setText(res["error"])
+        else:
+            self.lbl_calc_result.setText(
+                f"Spezzone {res['length_mm']:.0f} mm ({res['length_m']:.3f} m) ➔ "
+                f"Peso: {res['weight_kg']:.3f} kg | Prezzo: € {res['price_per_kg']:.2f}/{res['purchase_um']} ➔ "
+                f"COSTO TOTALE: € {res['total_cost']:.2f} ({res['price_source']})"
+            )
+
+    def display_production_data(self, prod, materials, operations):
+        # 1. Calcolatore taglio materiale (attivo se conversion_factor presente e != 1 o se UM acquisto diversa da UM magazzino)
+        has_conv = (prod.conversion_factor and prod.conversion_factor > 0 and prod.conversion_factor != 1.0) or (prod.purchase_um and prod.purchase_um != prod.unit_measure)
+        if has_conv:
+            self.box_calc_material.setVisible(True)
+            self._on_recalculate_cut()
+        else:
+            self.box_calc_material.setVisible(False)
+
+        # 2. Popola Distinta Materiali
+        self.table_bom.setSortingEnabled(False)
+        self.table_bom.setRowCount(len(materials))
+        tot_mat_cost = 0.0
+
+        for i, m in enumerate(materials):
+            subtot = float(m.quantity or 1.0) * float(m.unit_cost or 0.0)
+            tot_mat_cost += subtot
+            self.table_bom.setItem(i, 0, SortableTableWidgetItem(str(m.line_num), sort_value=m.line_num))
+            self.table_bom.setItem(i, 1, QTableWidgetItem(m.component_code))
+            self.table_bom.setItem(i, 2, QTableWidgetItem(m.description or "-"))
+            self.table_bom.setItem(i, 3, QTableWidgetItem(m.unit_measure or "NR"))
+            self.table_bom.setItem(i, 4, SortableTableWidgetItem(f"{m.quantity:.3f}", sort_value=m.quantity))
+            self.table_bom.setItem(i, 5, SortableTableWidgetItem(f"€ {m.unit_cost:.2f}", sort_value=m.unit_cost))
+            self.table_bom.setItem(i, 6, SortableTableWidgetItem(f"€ {subtot:.2f}", sort_value=subtot))
+
+        self.table_bom.setSortingEnabled(True)
+
+        # 3. Popola Ciclo Lavorazioni
+        self.table_routing.setSortingEnabled(False)
+        self.table_routing.setRowCount(len(operations))
+        tot_run_h = 0.0
+        tot_setup_h = 0.0
+        tot_ops_cost = 0.0
+
+        for i, op in enumerate(operations):
+            run_h = float(op.operation_hours or 0.0)
+            setup_h = float(op.setup_hours or 0.0)
+            rate = float(op.hourly_rate or 0.0)
+            line_cost = (run_h + setup_h) * rate
+            tot_run_h += run_h
+            tot_setup_h += setup_h
+            tot_ops_cost += line_cost
+
+            self.table_routing.setItem(i, 0, SortableTableWidgetItem(str(op.sequence), sort_value=op.sequence))
+            self.table_routing.setItem(i, 1, QTableWidgetItem(op.phase_code))
+            self.table_routing.setItem(i, 2, QTableWidgetItem(op.description or "-"))
+            self.table_routing.setItem(i, 3, SortableTableWidgetItem(f"{setup_h:.1f} h", sort_value=setup_h))
+            self.table_routing.setItem(i, 4, SortableTableWidgetItem(f"{run_h:.1f} h", sort_value=run_h))
+            self.table_routing.setItem(i, 5, SortableTableWidgetItem(f"€ {rate:.2f}/h", sort_value=rate))
+            self.table_routing.setItem(i, 6, SortableTableWidgetItem(f"€ {line_cost:.2f}", sort_value=line_cost))
+
+        self.table_routing.setSortingEnabled(True)
+
+        # 4. Aggiorna riepilogo costi
+        tot_prod_cost = tot_mat_cost + tot_ops_cost
+        if materials or operations:
+            self.lbl_prod_cost_summary.setText(
+                f"🔩 Costo Materiali: € {tot_mat_cost:,.2f}  |  "
+                f"⏱️ Ore Macchina: {tot_run_h:.1f} h (Attrezzo: {tot_setup_h:.1f} h)  |  "
+                f"⚙️ Costo Fasi: € {tot_ops_cost:,.2f}  |  "
+                f"💰 COSTO PRODUZIONE TOTALE: € {tot_prod_cost:,.2f}"
+            )
+            self.tabs.setTabText(2, f"Distinta & Lavorazioni ({len(materials)} mat, {len(operations)} fasi)")
+        elif has_conv:
+            self.lbl_prod_cost_summary.setText(
+                f"📦 Articolo Commerciale con Fattore di Conversione: {prod.conversion_factor:.4f} {prod.unit_measure}/{prod.purchase_um or 'KG'}"
+            )
+            self.tabs.setTabText(2, "Calcolatore Taglio Materiale")
+        else:
+            self.lbl_prod_cost_summary.setText("Nessuna distinta o ciclo di lavorazione associato a questo articolo.")
+            self.tabs.setTabText(2, "Distinta Base & Lavorazioni (Produzione)")
 
     def display_purchases(self, results):
         self.table_purchases.setSortingEnabled(False)

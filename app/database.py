@@ -58,9 +58,22 @@ class Product(Base):
     customer_code = Column(String(100), nullable=True) # Per compatibilità
     notes = Column(Text, nullable=True)
     
+    # B-Kode / Produzione / Conversioni
+    bkode_id = Column(Integer, nullable=True, index=True) # ID interno B-Kode (art_id)
+    bkode_type = Column(String(20), nullable=True) # A (Acquisto), P (Produzione), S (Semilavorato)
+    conversion_factor = Column(Float, default=1.0) # art_cnv_a: conversione da UM acquisto a UM magazzino (es. kg/m)
+    purchase_um = Column(String(20), nullable=True) # art_um_a: UM acquisto (es. KG)
+    gross_weight = Column(Float, default=0.0) # art_peso_l: peso lordo
+    net_weight = Column(Float, default=0.0) # art_peso_n: peso netto
+    drawing_number = Column(Text, nullable=True) # art_n_d: numero disegno tecnico o specifica tecnica
+    raw_material_class = Column(String(50), nullable=True) # art_classe: classe materiale (MAT, DIS, etc.)
+    default_supplier_id = Column(String(50), nullable=True) # art_for1: fornitore abituale B-Kode
+    
     # Relazioni
     legacy_codes = relationship("ProductLegacyCode", back_populates="product", cascade="all, delete-orphan")
     supplier_products = relationship("SupplierProduct", back_populates="product", cascade="all, delete-orphan")
+    materials = relationship("ProductMaterial", foreign_keys="ProductMaterial.product_id", back_populates="product", cascade="all, delete-orphan")
+    operations = relationship("ProductOperation", back_populates="product", cascade="all, delete-orphan")
     purchase_items = relationship("InvoiceItem", back_populates="product")
     sales_items = relationship("SalesInvoiceItem", back_populates="product")
     exploded_items = relationship("ExplodedDiagramItem", back_populates="product")
@@ -106,6 +119,51 @@ class SupplierProduct(Base):
 
     def __repr__(self):
         return f"<SupplierProduct(supplier='{self.supplier_name}', code='{self.supplier_code}')>"
+
+
+class ProductMaterial(Base):
+    """Distinta Base / Componenti di produzione (BOM) da B-Kode (mgadisList)."""
+    __tablename__ = 'product_materials'
+    
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False, index=True)
+    bkode_id = Column(Integer, nullable=True, index=True) # dco_id
+    line_num = Column(Integer, default=10) # dco_seq
+    component_code = Column(String(100), nullable=False, index=True) # dco_figlio
+    component_product_id = Column(Integer, ForeignKey('products.id'), nullable=True, index=True)
+    description = Column(String(255), nullable=True) # art_des1
+    unit_measure = Column(String(20), default="NR") # art_um
+    quantity = Column(Float, default=1.0) # dco_qta
+    unit_cost = Column(Float, default=0.0) # dco_costo
+    scrap_factor = Column(Float, default=0.0) # dco_ft_scarto
+    notes = Column(Text, nullable=True) # dco_note
+    
+    product = relationship("Product", foreign_keys=[product_id], back_populates="materials")
+    component_product = relationship("Product", foreign_keys=[component_product_id])
+
+    def __repr__(self):
+        return f"<ProductMaterial(product_id={self.product_id}, comp='{self.component_code}', qta={self.quantity})>"
+
+
+class ProductOperation(Base):
+    """Ciclo di lavorazione / Fasi macchine da B-Kode (mgacicList)."""
+    __tablename__ = 'product_operations'
+    
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False, index=True)
+    bkode_id = Column(Integer, nullable=True, index=True) # cic_id
+    sequence = Column(Integer, default=10) # cic_seq
+    phase_code = Column(String(50), nullable=False, index=True) # cic_figlio (es. _LAV00, _LAV06, _LAV03)
+    description = Column(String(255), nullable=True) # art_des1
+    setup_hours = Column(Float, default=0.0) # cic_t_atrz (ore attrezzaggio)
+    operation_hours = Column(Float, default=0.0) # cic_t_ese (ore esecuzione)
+    hourly_rate = Column(Float, default=0.0) # cic_cos_uni (tariffa/costo orario)
+    notes = Column(Text, nullable=True) # cic_note
+    
+    product = relationship("Product", back_populates="operations")
+
+    def __repr__(self):
+        return f"<ProductOperation(product_id={self.product_id}, phase='{self.phase_code}', run_h={self.operation_hours})>"
 
 
 # ==========================================

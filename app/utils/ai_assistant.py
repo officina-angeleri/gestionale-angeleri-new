@@ -61,6 +61,19 @@ REGOLE PER RICERCHE FORNITORI E STORICO PREZZI (ES. 'cerca ingranaggio z26 da im
     - Nei cataloghi commerciali e nelle fatture fornitori (es. IMBG), i componenti a dentatura commerciale sono spesso descritti come 'PIGNONE' (es. 'PIGNONE SEMPLICE P.8x3 Z=26'), 'PULEGGIA' (es. 'PULEGGIA 27 T5 Z=26') o 'BARRA METRICA T5 Z=26'.
     - Il numero di denti è spesso indicato come 'Z=26' o 'Z 26' o 'Z26'.
     - Mostra all'utente sia gli acquisti trovati dal fornitore (es. il pignone commerciale Z=26 con numero di fattura e prezzo), sia l'eventuale corrispettivo a disegno interno officina (es. L050-0010) se pertinente.
+
+REGOLE PER DISTINTE MATERIALI (BOM), LAVORAZIONI E CALCOLO COSTI:
+- Per gli articoli a disegno di produzione (es. L010-0016, L011-..., L050-...):
+  * Se l'utente chiede 'da cosa è composto', 'quali materiali servono', 'quante ore di macchina/lavoro ci vogliono', o 'calcola il costo di produzione':
+    USA SEMPRE lo strumento 'calcola_costo_produzione'.
+  * Mostra:
+    1. Distinta Materiali (componenti, quantità, costo unitario)
+    2. Ciclo Lavorazioni (fasi macchina es. Fresatura HURCO, Alesaggio, Attrezzaggio, con ore e tariffe)
+    3. Riepilogo Costi: Totale Materiali + Totale Lavorazioni = Costo Produzione Stimato.
+- Per i materiali commerciali (barre, tondi ottone/ferro/alluminio es. A102-0008):
+  * Se l'utente chiede 'quanto costa uno spezzone di 200 mm di ottone...', 'calcola il costo per 150 mm di A102-0008', 'quanto pesa 300 mm...':
+    USA SEMPRE lo strumento 'calcola_spezzone_materiale'.
+  * Spiega chiaramente il calcolo: Lunghezza (mm ➔ m) × Fattore Conversione (kg/m) = Peso (kg) × Prezzo (€/kg) = Costo Totale.
 """
 
 class GeminiAssistant:
@@ -117,7 +130,9 @@ class GeminiAssistant:
                 self.storico_vendite_cliente,
                 self.dettaglio_fornitore,
                 self.dettaglio_cliente,
-                self.statistiche_generali_officina
+                self.statistiche_generali_officina,
+                self.calcola_costo_produzione,
+                self.calcola_spezzone_materiale
             ]
 
             config = types.GenerateContentConfig(
@@ -1019,3 +1034,20 @@ class GeminiAssistant:
             }, ensure_ascii=False)
         finally:
             session.close()
+
+    def calcola_costo_produzione(self, codice_articolo: str) -> str:
+        """
+        Calcola e restituisce la distinta base (materiali/componenti) e il ciclo di lavorazione con ore macchina e attrezzaggio per un articolo di produzione (es. L010-0016).
+        Restituisce la composizione dettagliata dei costi, il totale materiali, il totale ore lavorazione e il costo finale stimato per pezzo.
+        """
+        res = self.controller.calculate_production_piece_cost(codice_articolo)
+        return json.dumps(res, ensure_ascii=False)
+
+    def calcola_spezzone_materiale(self, codice_materiale: str, lunghezza_mm: float) -> str:
+        """
+        Calcola il peso e il costo di uno spezzone di materiale commerciale (es. barra di ottone A102-0008, tondo alluminio, piastra, profilo)
+        a partire dalla lunghezza richiesta in millimetri (es. 200 mm), applicando il fattore di conversione lunghezza -> peso (kg/m) e l'ultimo prezzo di acquisto al kg.
+        """
+        res = self.controller.calculate_raw_material_cut(codice_materiale, float(lunghezza_mm))
+        return json.dumps(res, ensure_ascii=False)
+
