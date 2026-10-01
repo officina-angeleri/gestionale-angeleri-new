@@ -238,11 +238,19 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Connesso al server Synology DS920+ (angeleri_db)")
 
-        self.btn_bkode_status = QPushButton("🟢 B-Kode: In ascolto")
+        from app.utils.settings import SettingsManager
+        has_creds = bool(SettingsManager().get_bkode_password() or SettingsManager().get_bkode_cookie())
+        if has_creds:
+            self.btn_bkode_status = QPushButton("🟢 B-Kode: In ascolto")
+            self.btn_bkode_status.setStyleSheet("color: #2E7D32; font-weight: bold; font-size: 11px;")
+            self.btn_bkode_status.setToolTip("Stato sincronizzazione automatica B-Kode. Clicca per configurare o forzare la sincronizzazione.")
+        else:
+            self.btn_bkode_status = QPushButton("🔴 B-Kode: Password mancante")
+            self.btn_bkode_status.setStyleSheet("color: #D32F2F; font-weight: bold; font-size: 11px;")
+            self.btn_bkode_status.setToolTip("Password B-Kode non inserita. Clicca qui per inserire la password e scaricare fatture e listini.")
+
         self.btn_bkode_status.setFlat(True)
         self.btn_bkode_status.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_bkode_status.setStyleSheet("color: #2E7D32; font-weight: bold; font-size: 11px;")
-        self.btn_bkode_status.setToolTip("Stato sincronizzazione automatica B-Kode. Clicca per configurare o forzare la sincronizzazione.")
         self.btn_bkode_status.clicked.connect(self.show_bkode_dialog)
         self.status_bar.addPermanentWidget(self.btn_bkode_status)
 
@@ -264,14 +272,18 @@ class MainWindow(QMainWindow):
     def _on_bkode_sync_updated(self, msg: str):
         self.status_bar.showMessage(msg, 10000)
         if hasattr(self, 'btn_bkode_status'):
-            if "completata" in msg.lower():
+            if "mancant" in msg.lower() or "fallit" in msg.lower() or "errore" in msg.lower() or "non valid" in msg.lower():
+                self.btn_bkode_status.setText("🔴 B-Kode: Password mancante")
+                self.btn_bkode_status.setStyleSheet("color: #D32F2F; font-weight: bold; font-size: 11px;")
+            elif "completata" in msg.lower() or "recente" in msg.lower():
                 self.btn_bkode_status.setText("🟢 B-Kode: Sincronizzato")
+                self.btn_bkode_status.setStyleSheet("color: #2E7D32; font-weight: bold; font-size: 11px;")
             elif "altra postazione" in msg.lower():
-                self.btn_bkode_status.setText("🟡 B-Kode: Altra postazione attiva")
-            elif "fallit" in msg.lower() or "error" in msg.lower():
-                self.btn_bkode_status.setText("🔴 B-Kode: Errore credenziali")
+                self.btn_bkode_status.setText("🟡 B-Kode: Sync su altro PC")
+                self.btn_bkode_status.setStyleSheet("color: #F57C00; font-weight: bold; font-size: 11px;")
             else:
                 self.btn_bkode_status.setText("🟢 B-Kode: Attivo")
+                self.btn_bkode_status.setStyleSheet("color: #2E7D32; font-weight: bold; font-size: 11px;")
             self.btn_bkode_status.setToolTip(msg)
 
     def refresh_current_view(self):

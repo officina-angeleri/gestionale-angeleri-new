@@ -12,6 +12,7 @@ import requests
 import hashlib
 import base64
 import json
+import re
 import urllib3
 import logging
 from typing import Optional, List, Dict, Any
@@ -104,6 +105,10 @@ class BKodeClient:
         logger.info("[B-Kode] Sessione scaduta o non valida. Tento il rinnovo...")
         return self.login()
 
+    def _clean_json(self, raw_text: str) -> str:
+        """Rimuove costrutti JS non-standard (come new Date(...)) generati da ExtJS."""
+        return re.sub(r'new\s+Date\([^)]*\)', '""', raw_text)
+
     def _post_grid(self, grid_name: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Esegue una chiamata POST a un endpoint gridjson di B-Kode con gestione auto-login."""
         url = f"{self.BASE_URL}/panel/gridjson/{grid_name}/angeleri/"
@@ -113,8 +118,10 @@ class BKodeClient:
                 r = self.session.post(url, data=payload, timeout=30)
                 if r.status_code == 200 and not r.text.strip().startswith("<!DOCTYPE html"):
                     try:
-                        return json.loads(r.text)
-                    except json.JSONDecodeError:
+                        clean_text = self._clean_json(r.text)
+                        return json.loads(clean_text)
+                    except json.JSONDecodeError as jde:
+                        logger.warning(f"[B-Kode] Errore parsing JSON {grid_name}: {jde}")
                         return None
                 elif r.status_code == 200 and "login" in r.text.lower():
                     # Sessione scaduta: effettua il login e riprova

@@ -376,7 +376,7 @@ class PriceList(Base):
     __tablename__ = 'price_lists'
 
     id = Column(Integer, primary_key=True)
-    bkode_id = Column(Integer, unique=True, nullable=True, index=True)
+    bkode_id = Column(Integer, nullable=True, index=True)
     list_type = Column(String(20), nullable=False, index=True) # 'PURCHASE' (Fornitori) o 'SALE' (Clienti)
     code = Column(String(50), nullable=True) # es. '10', 'E1'
     description = Column(String(255), nullable=True) # es. 'quotazioni', 'LISTINO CEE XCEE EURO'
@@ -405,8 +405,8 @@ class PriceListItem(Base):
     price_list_id = Column(Integer, ForeignKey('price_lists.id'), nullable=False, index=True)
     product_id = Column(Integer, ForeignKey('products.id'), nullable=True, index=True)
     product_code = Column(String(100), nullable=False, index=True)
-    description = Column(String(500), nullable=True)
-    drawing_number = Column(String(100), nullable=True)
+    description = Column(Text, nullable=True)
+    drawing_number = Column(Text, nullable=True)
     unit_measure = Column(String(20), default='NR')
     base_price = Column(Float, default=0.0) # Prezzo base da listino
     discount_1 = Column(Float, default=0.0) # Sconto 1 (%)

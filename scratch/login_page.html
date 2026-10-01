@@ -1,0 +1,196 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+	<meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1" />
+	<meta http-equiv="X-UA-Compatible" content="IE=EmulateIE7">
+		<title></title>
+	<meta http-equiv="content-language" content="it">
+	<meta name="author" content="bkode" />
+</head>
+
+<style type="text/css">
+
+.login {
+    background-image:url(https://www.bkode.cloud/assets/im/login.gif) !important;
+}
+
+</style>
+
+	<link rel="icon" href="https://www.bkode.cloud/assets/im/favicon.ico" />
+
+	<link href="https://www.bkode.cloud/assets/css/main.css" rel="stylesheet" type="text/css" media="screen" />
+	<link rel="stylesheet" href="https://www.bkode.cloud/assets/ext/resources/css/ext-all.css" />
+	
+	<script type="text/javascript" src="https://www.bkode.cloud/assets/ext/adapter/ext/ext-base.js"></script>
+	<script type="text/javascript" src="https://www.bkode.cloud/assets/ext/ext-all.js"></script>
+	<script type="text/javascript" src="https://www.bkode.cloud/assets/ext/ux-all_2.js"></script>
+
+	<!-- Additional Ext overrides and application-specific -->
+	<script type="text/javascript" src="https://www.bkode.cloud/assets/js/base64.js"></script>
+	<script type="text/javascript" src="https://www.bkode.cloud/assets/js/sha1_crypt.js"></script>
+	<script type="text/javascript" src="https://www.bkode.cloud/assets/js/javaphp_2.3.js"></script>
+<body>
+
+
+<script type="text/javascript">
+var winW = 630, winH = 460;
+if (document.body && document.body.offsetWidth) {
+ winW = document.body.offsetWidth;
+ winH = document.body.offsetHeight;
+}
+if (document.compatMode=='CSS1Compat' &&
+    document.documentElement &&
+    document.documentElement.offsetWidth ) {
+ winW = document.documentElement.offsetWidth;
+ winH = document.documentElement.offsetHeight;
+}
+if (window.innerWidth && window.innerHeight) {
+ winW = window.innerWidth;
+ winH = window.innerHeight;
+}	
+Ext.onReady(function(){
+
+	var conn = new Ext.data.Connection();
+
+			var password = new Ext.Window({
+				width: 270,
+				height: 185,
+				x: (winW - 270) / 2, // 490
+				y: (winH - 270) / 2, // 220
+				closable: true,
+				border: true,
+				header: true,
+				title: '<i>Login</i>',
+				modal: true,
+				items: passwdForm = new Ext.FormPanel({
+					labelWidth: 75, // label settings here cascade unless overridden
+					frame:true,
+					title: 'User',
+					iconCls:'login',
+					bodyStyle:'padding:5px 5px 0',
+					width: 270,
+					defaults: {width: 150},
+					defaultType: 'textfield',
+					delay:200,
+
+					items: [{
+						id: 'user',
+						fieldLabel: 'User',
+						name: 'user',
+						maxLength: 40,
+						value: '',
+						allowBlank:true
+					},{
+						id: 'passwd',
+						fieldLabel: 'Password',
+						name: 'passwd',
+						inputType: 'password',
+						maxLength: 41,
+						allowBlank:false
+					},{
+						id: 'language',
+						xtype: 'combo',
+						fieldLabel: 'Language',
+						autoload: true,
+						name: 'language',
+						mode: 'local',
+						store: new Ext.data.SimpleStore({
+							fields: ['language','description'],
+							data: [['IT', 'Italiano'],['EN', 'English']]
+						}),
+						valueField: 'language',
+						displayField: 'description',
+						submitValue : true,
+						value: 'EN',
+						disabled: false,
+						allowBlank:true
+					}],
+					keys: [{
+						key: Ext.EventObject.ENTER,
+						fn: function(){
+							// Ext.util.Cookies.set("mabc","eg"); 
+							if (!passwdForm.getForm().isValid()) return false;
+							var ar=passwdForm.getForm().getValues();
+							if (ar['user']=='' || ar['passwd']=='') return false;
+							var pwd = new String(ar['passwd']);
+							conn.request({
+								url: "https://www.bkode.cloud/menu/index",
+								method: 'POST',
+								params: {user: ar['user'], passwd: (pwd.length==41 ? ar['passwd'] : sha1(ar['passwd'])), language: ar['language'], thema:''},
+								success: function(responseCheck) {
+									fromServer = responseCheck.responseText;
+									if (fromServer=="OK") {
+										//var myCookie = Ext.util.Cookies.get("mabc");
+										//konsole.log("Cookey",myCookie);
+										window.setTimeout(function () {
+											window.location = 'https://www.bkode.cloud/menu/index/'+Base64.encode(ar['user'])+'/';
+											password.close();
+										},2000);
+									} else {
+										Ext.Msg.show({title:'Accesso', msg:(fromServer != '' ? fromServer : '<i/>WRONG PASSWORD</i>'), animEl: 'elId',icon: Ext.MessageBox.ERROR});
+										passwdForm.getForm().reset();
+									}
+								},
+								failure: function() {
+									Ext.Msg.show({title:'Accesso', msg:'<i/>SERVER OFFLINE - CALL MAINTENANCE.</i>', animEl: 'elId',icon: Ext.MessageBox.ERROR});
+									window.setTimeout(function () {
+										password.close();
+									},1500);
+								}
+							});
+
+						}
+					}],
+					buttonAlign: 'center',
+					buttons: [{
+						text: 'Login',
+						handler: function(){
+							if (!passwdForm.getForm().isValid()) return false;
+							var ar=passwdForm.getForm().getValues();
+							if (ar['user']=='' || ar['passwd']=='') return false;
+							var pwd = new String(ar['passwd']);
+							conn.request({
+								url: "https://www.bkode.cloud/menu/index",
+								method: 'POST',
+								//params: {user: ar['user'], passwd: (pwd.substr(0,1)=='e' ? ar['passwd'] : sha1(ar['passwd'])), language: ar['language'], thema:''},
+								params: {user: ar['user'], passwd: (pwd.length==41 ? ar['passwd'] : sha1(ar['passwd'])), language: ar['language'], thema:''},
+								success: function(responseCheck) {
+									fromServer = responseCheck.responseText;
+									if (fromServer=='OK') {
+										window.setTimeout(function () {
+											window.location = 'https://www.bkode.cloud/menu/index/'+Base64.encode(ar['user'])+'/';
+											password.close();
+										},2000);
+									} else {
+										Ext.Msg.show({title:'Accesso', msg:(fromServer != '' ? fromServer : '<i/>WRONG PASSWORD</i>'), animEl: 'elId',icon: Ext.MessageBox.ERROR});
+										passwdForm.getForm().reset();
+									}
+								},
+								failure: function() {
+									Ext.Msg.show({title:'Accesso', msg:'<i/>SERVER OFFLINE - CALL MAINTENANCE.</i>', animEl: 'elId',icon: Ext.MessageBox.ERROR});
+									window.setTimeout(function () {
+										password.close();
+									},1500);
+								}
+							})
+						}
+					}]
+				})
+			});
+			password.show('dd-del-div');
+});
+	document.body.style.backgroundImage = 'url("https://www.bkode.cloud/assets/im/sites/login.png")';
+	
+	/*
+	window.setTimeout(function () {
+	  	document.body.style.backgroundImage = 'url("https://www.bkode.cloud/assets/im/sites/login.png")';
+	},3000);
+	document.body.style.backgroundImage = 'url("https://www.munisoft.it/assets/im/sites/andra_tutto_bene.jpg")';
+	document.body.style.backgroundImage = 'url("https://www.munisoft.it/assets/im/sites/andra_tutto_bene.jpg")';
+	document.body.style.backgroundImage = 'url("https://www.munisoft.it/assets/im/sites/andra_tutto_bene.png")';
+	*/
+	function remove(id)
+{
+    return (elem=document.getElementById(id)).parentNode.removeChild(elem);
+}	
+</script>

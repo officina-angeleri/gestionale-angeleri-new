@@ -191,7 +191,7 @@ def main():
             if not v_id:
                 continue
 
-            db_sl = session.query(PriceList).filter_by(bkode_id=v_id).first()
+            db_sl = session.query(PriceList).filter_by(bkode_id=v_id, list_type="SALE").first()
             if not db_sl:
                 db_sl = PriceList(bkode_id=v_id, list_type="SALE")
                 session.add(db_sl)
@@ -220,11 +220,11 @@ def main():
 
         s_items_saved = 0
         for it in s_items:
-            art_code = (it.get("lir_art") or "").strip()
+            art_code = (it.get("vld_art") or it.get("art_code") or it.get("lir_art") or "").strip()
             if not art_code or art_code == ".":
                 continue
 
-            vlt_id = int(it.get("lir_vlt_id") or 0)
+            vlt_id = int(it.get("vld_vlt_id") or it.get("lir_vlt_id") or 0)
             db_sl_id = bkode_sales_to_db.get(vlt_id)
             if not db_sl_id:
                 continue
@@ -237,14 +237,17 @@ def main():
                 db_item = PriceListItem(price_list_id=db_sl_id, product_code=art_code)
                 session.add(db_item)
 
-            prz = float(it.get("lir_prz_1") or 0.0)
-            sc1 = float(it.get("lir_sc_1_1") or 0.0)
-            sc2 = float(it.get("lir_sc_1_2") or 0.0)
-            net = prz * (1.0 - sc1 / 100.0) * (1.0 - sc2 / 100.0)
+            prz = float(it.get("vld_prz_1") or it.get("lir_prz_1") or 0.0)
+            sc1 = float(it.get("vld_sc_1_1") or it.get("lir_sc_1_1") or 0.0)
+            sc2 = float(it.get("vld_sc_1_2") or it.get("lir_sc_1_2") or 0.0)
+            sc3 = float(it.get("vld_sc_1_3") or it.get("lir_sc_1_3") or 0.0)
+            net = prz * (1.0 - sc1 / 100.0) * (1.0 - sc2 / 100.0) * (1.0 - sc3 / 100.0)
 
+            db_item.description = (it.get("art_des1") or "").strip()
             db_item.base_price = prz
             db_item.discount_1 = sc1
             db_item.discount_2 = sc2
+            db_item.discount_3 = sc3
             db_item.net_price = net
 
             prod = session.query(Product).filter(Product.code.ilike(art_code)).first()

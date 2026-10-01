@@ -83,14 +83,17 @@ class BKodeSyncEngine:
                     logger.info(f"[Sync] {summary['reason']}")
                     return summary
 
-            summary["executed"] = True
-            logger.info(f"[Sync] Nodo eletto Master: {self.hostname}. Avvio sincronizzazione B-Kode...")
+            logger.info(f"[Sync] Nodo eletto Master: {self.hostname}. Verifica credenziali B-Kode...")
 
             # Assicura autenticazione attiva
             if not self.client.ensure_authenticated():
-                summary["reason"] = "Autenticazione B-Kode fallita o credenziali non configurate."
-                logger.error(f"[Sync] {summary['reason']}")
+                summary["executed"] = False
+                summary["reason"] = "Credenziali B-Kode mancanti o non valide. Inserisci la password in 'B-Kode Cloud'."
+                logger.warning(f"[Sync] {summary['reason']}")
                 return summary
+
+            summary["executed"] = True
+            logger.info(f"[Sync] Autenticazione riuscita. Avvio sincronizzazione B-Kode...")
 
             # 3. Sincronizzazione Listini Prezzi (Acquisti & Vendite)
             pl_res = self.sync_price_lists(session)
@@ -224,29 +227,29 @@ class BKodeSyncEngine:
                 v_id = int(sl.get("vlt_id") or 0)
                 if not v_id:
                     continue
-                db_sl = session.query(PriceList).filter_by(bkode_id=v_id).first()
+                db_sl = session.query(PriceList).filter_by(bkode_id=v_id, list_type="SALE").first()
                 if not db_sl:
                     db_sl = PriceList(bkode_id=v_id, list_type="SALE")
                     session.add(db_sl)
 
                 db_sl.code = sl.get("vlt_code") or ""
                 db_sl.description = sl.get("vlt_des") or ""
-                db_sl.partner_name = sl.get("cli_ragsoc_1") or ""
+                db_sl.partner_name = sl.get("cli_ragsoc_1") or "Listino Generale"
                 db_sl.currency = sl.get("vlt_codval") or "EUR"
                 db_sl.status = "ATTIVO" if sl.get("vlt_status") == "A" else "CHIUSO"
                 lists_count += 1
             session.commit()
 
-            # Mappa aggiornata
-            bkode_to_db_id = {pl.bkode_id: pl.id for pl in session.query(PriceList).all()}
+            # Mappa listini vendita
+            bkode_sales_to_db = {pl.bkode_id: pl.id for pl in session.query(PriceList).filter_by(list_type="SALE").all()}
 
             for it in s_items:
-                art_code = (it.get("lir_art") or "").strip()
+                art_code = (it.get("vld_art") or it.get("art_code") or it.get("lir_art") or "").strip()
                 if not art_code or art_code == ".":
                     continue
 
-                vlt_id = int(it.get("lir_vlt_id") or 0)
-                db_sl_id = bkode_to_db_id.get(vlt_id)
+                vlt_id = int(it.get("vld_vlt_id") or it.get("lir_vlt_id") or 0)
+                db_sl_id = bkode_sales_to_db.get(vlt_id)
                 if not db_sl_id:
                     continue
 
@@ -258,14 +261,17 @@ class BKodeSyncEngine:
                     db_item = PriceListItem(price_list_id=db_sl_id, product_code=art_code)
                     session.add(db_item)
 
-                prz = float(it.get("lir_prz_1") or 0.0)
-                sc1 = float(it.get("lir_sc_1_1") or 0.0)
-                sc2 = float(it.get("lir_sc_1_2") or 0.0)
-                net = prz * (1.0 - sc1 / 100.0) * (1.0 - sc2 / 100.0)
+                prz = float(it.get("vld_prz_1") or it.get("lir_prz_1") or 0.0)
+                sc1 = float(it.get("vld_sc_1_1") or it.get("lir_sc_1_1") or 0.0)
+                sc2 = float(it.get("vld_sc_1_2") or it.get("lir_sc_1_2") or 0.0)
+                sc3 = float(it.get("vld_sc_1_3") or it.get("lir_sc_1_3") or 0.0)
+                net = prz * (1.0 - sc1 / 100.0) * (1.0 - sc2 / 100.0) * (1.0 - sc3 / 100.0)
 
+                db_item.description = (it.get("art_des1") or "").strip()
                 db_item.base_price = prz
                 db_item.discount_1 = sc1
                 db_item.discount_2 = sc2
+                db_item.discount_3 = sc3
                 db_item.net_price = net
 
                 prod = session.query(Product).filter(Product.code.ilike(art_code)).first()
@@ -357,9 +363,9 @@ class BKodeSyncEngine:
 
         try:
             # 1. Fatture Vendita Clienti
-            sales_invs = self.client.fetch_sales_invoices(start=0, limit=50)
+            sales_invs = self.client.fetch_sales_invoices(start=0, limit=100)
             for inv in sales_invs:
-                num = str(inv.get("fat_num") or inv.get("doc_num") or "").strip()
+                num = str(inv.get("fat_nr") or inv.get("fat_num") or inv.get("doc_num") or "").strip()
                 dt_str = inv.get("fat_dt") or inv.get("doc_dt") or ""
                 if not num or not dt_str:
                     continue
@@ -371,20 +377,21 @@ class BKodeSyncEngine:
                 exists = session.query(SalesInvoice).filter_by(number=num, year=dt.year).first()
                 if not exists:
                     # Cerca o crea cliente
-                    cust_name = inv.get("cli_ragsoc_1") or "Cliente Sconosciuto"
+                    cust_name = (inv.get("cli_ragsoc_1") or "Cliente Sconosciuto").strip()
                     cust = session.query(Customer).filter(Customer.name.ilike(cust_name)).first()
                     if not cust:
                         cust = Customer(name=cust_name)
                         session.add(cust)
                         session.flush()
 
-                    tot = float(inv.get("fat_tot_doc") or inv.get("doc_tot") or 0.0)
+                    tot = float(inv.get("fat_imp_net") or inv.get("fat_tot_doc") or inv.get("doc_tot") or 0.0)
+                    doc_type = inv.get("cau_des") or inv.get("fat_tipo") or "FATTURA"
                     new_inv = SalesInvoice(
                         customer_id=cust.id,
                         number=num,
                         date=dt,
                         year=dt.year,
-                        doc_type=inv.get("fat_tipo") or "FATTURA",
+                        doc_type=doc_type,
                         total_amount=tot
                     )
                     session.add(new_inv)
@@ -393,10 +400,10 @@ class BKodeSyncEngine:
             session.commit()
 
             # 2. Fatture Elettroniche Acquisto Fornitori
-            purch_invs = self.client.fetch_purchase_invoices(start=0, limit=50)
+            purch_invs = self.client.fetch_purchase_invoices(start=0, limit=100)
             for pinv in purch_invs:
-                num = str(pinv.get("xml_num_doc") or pinv.get("doc_num") or "").strip()
-                dt_str = pinv.get("xml_dt_doc") or pinv.get("doc_dt") or ""
+                num = str(pinv.get("fxml_nr_fat") or pinv.get("xml_num_doc") or pinv.get("doc_num") or "").strip()
+                dt_str = pinv.get("fxml_dt_fat") or pinv.get("xml_dt_doc") or pinv.get("doc_dt") or ""
                 if not num or not dt_str:
                     continue
                 try:
@@ -404,22 +411,27 @@ class BKodeSyncEngine:
                 except Exception:
                     continue
 
-                # Cerca fornitore
-                supp_name = pinv.get("for_ragsoc_1") or pinv.get("xml_ced_ragsoc") or ""
+                supp_name = (pinv.get("fxml_ragsoc_1") or pinv.get("for_ragsoc_1") or pinv.get("xml_ced_ragsoc") or "").strip()
                 if supp_name:
                     supp = session.query(Supplier).filter(Supplier.name.ilike(supp_name)).first()
-                    if supp:
-                        exists_p = session.query(Invoice).filter_by(supplier_id=supp.id, number=num, date=dt).first()
-                        if not exists_p:
-                            tot = float(pinv.get("xml_tot_doc") or pinv.get("doc_tot") or 0.0)
-                            new_p = Invoice(
-                                supplier_id=supp.id,
-                                number=num,
-                                date=dt,
-                                total_amount=tot
-                            )
-                            session.add(new_p)
-                            invoices_count += 1
+                    if not supp:
+                        supp = Supplier(name=supp_name)
+                        session.add(supp)
+                        session.flush()
+
+                    exists_p = session.query(Invoice).filter_by(supplier_id=supp.id, number=num, date=dt).first()
+                    if not exists_p:
+                        tot = float(pinv.get("fxml_tot") or pinv.get("fxml_imp") or pinv.get("xml_tot_doc") or 0.0)
+                        file_name = pinv.get("fxml_file") or pinv.get("fxml_file_sdi") or ""
+                        new_p = Invoice(
+                            supplier_id=supp.id,
+                            number=num,
+                            date=dt,
+                            total_amount=tot,
+                            file_path=file_name
+                        )
+                        session.add(new_p)
+                        invoices_count += 1
 
             session.commit()
             status_rec.status = "SUCCESS"
