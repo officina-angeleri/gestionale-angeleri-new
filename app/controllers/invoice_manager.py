@@ -507,6 +507,82 @@ class InvoiceManager:
             'operations': operations
         }
 
+    def search_matching_products(self, text: str, supplier_name: str = None, search_code: bool = True, search_desc: bool = True, limit: int = 150):
+        """
+        Cerca gli articoli a catalogo corrispondenti al testo inserito.
+        Supporta codice master esatto, codice vecchio/legacy esatto, codice fornitore esatto,
+        e ricerca multi-parola nella descrizione e nei codici dell'articolo.
+        Restituisce una lista di oggetti Product.
+        """
+        import re
+        from sqlalchemy import or_, and_
+        from app.database import Product, ProductLegacyCode, SupplierProduct, Supplier
+
+        clean = text.strip().replace('\u200b', '')
+        if not clean:
+            return []
+
+        if not search_code and not search_desc:
+            search_code = search_desc = True
+
+        # 1. Se il testo corrisponde esattamente a un codice (master, legacy, o fornitore)
+        if search_code:
+            p_exact = self.session.query(Product).filter(Product.code.ilike(clean)).all()
+            if p_exact:
+                return p_exact
+
+            p_leg = self.session.query(Product).join(ProductLegacyCode).filter(ProductLegacyCode.legacy_code.ilike(clean)).all()
+            if p_leg:
+                return p_leg
+
+            p_supp = self.session.query(Product).join(SupplierProduct).filter(SupplierProduct.supplier_code.ilike(clean)).all()
+            if p_supp:
+                return p_supp
+
+        # 2. Ricerca multi-parola per descrizione e/o codice
+        norm = re.sub(r'\b([a-zA-Z])\s+(\d+)\b', r'\1\2', clean, flags=re.IGNORECASE)
+        stopwords = {'il', 'lo', 'la', 'i', 'gli', 'le', 'di', 'da', 'in', 'con', 'su', 'per', 'del', 'della', 'dei', 'degli'}
+        raw_words = [w for w in re.split(r'[\s%]+', norm) if len(w) > 1]
+        words = [w for w in raw_words if w.lower() not in stopwords]
+        if not words and raw_words:
+            words = raw_words
+
+        if not words:
+            return []
+
+        q = self.session.query(Product).outerjoin(SupplierProduct).outerjoin(Supplier).outerjoin(ProductLegacyCode)
+
+        if supplier_name and supplier_name != 'Tutti i fornitori':
+            q = q.filter(Supplier.name == supplier_name)
+
+        word_conds = []
+        for w in words:
+            m = re.match(r'^([a-zA-Z]+)(\d+)$', w)
+            patterns = [f"%{w}%"]
+            if m:
+                l, n = m.group(1), m.group(2)
+                patterns.extend([f"%{l} {n}%", f"%{l}={n}%", f"%{l}.{n}%", f"%{l}-{n}%"])
+
+            w_pats = []
+            for pat in patterns:
+                if search_desc:
+                    w_pats.append(Product.name.ilike(pat))
+                    w_pats.append(SupplierProduct.supplier_description.ilike(pat))
+                    w_pats.append(ProductLegacyCode.legacy_description.ilike(pat))
+                if search_code:
+                    w_pats.append(Product.code.ilike(pat))
+                    w_pats.append(ProductLegacyCode.legacy_code.ilike(pat))
+                    w_pats.append(SupplierProduct.supplier_code.ilike(pat))
+
+            if w_pats:
+                word_conds.append(or_(*w_pats))
+
+        if not word_conds:
+            return []
+
+        results = q.filter(and_(*word_conds)).distinct().order_by(Product.code).limit(limit).all()
+        return results
+
     def calculate_raw_material_cut(self, product_code: str, length_mm: float) -> dict:
         """
         Calcola il costo di uno spezzone di materiale commerciale (es. barra di ottone/alluminio/acciaio).

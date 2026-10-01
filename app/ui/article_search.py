@@ -95,6 +95,60 @@ class ArticleSearchWidget(QWidget):
         options_layout.addStretch()
         layout.addLayout(options_layout)
 
+        # Box Risultati Intermedi Articoli Catalogo Corrispondenti
+        self.box_matching_products = QGroupBox("📋 Articoli Corrispondenti nel Catalogo")
+        self.box_matching_products.setStyleSheet(
+            "QGroupBox { font-weight: bold; border: 1px solid #1976D2; border-radius: 6px; margin-top: 6px; padding: 10px; background-color: #F0F4F8; }"
+        )
+        box_prod_layout = QVBoxLayout(self.box_matching_products)
+        box_prod_layout.setContentsMargins(8, 8, 8, 8)
+        box_prod_layout.setSpacing(6)
+
+        # Header box: titolo/guida + campo filtraggio rapido + toggle
+        prod_hdr_layout = QHBoxLayout()
+        self.lbl_matching_products_title = QLabel("Seleziona l'articolo desiderato per visualizzarne la scheda e lo storico:")
+        self.lbl_matching_products_title.setStyleSheet("font-weight: bold; color: #0D47A1; font-size: 13px;")
+        prod_hdr_layout.addWidget(self.lbl_matching_products_title)
+        prod_hdr_layout.addStretch()
+
+        self.input_filter_matching = QLineEdit()
+        self.input_filter_matching.setPlaceholderText("🔍 Filtra tra gli articoli trovati...")
+        self.input_filter_matching.setFixedWidth(240)
+        self.input_filter_matching.setFixedHeight(28)
+        self.input_filter_matching.setStyleSheet("padding-left: 8px; border: 1px solid #90CAF9; border-radius: 4px; background: white;")
+        self.input_filter_matching.textChanged.connect(self._filter_matching_products_table)
+        prod_hdr_layout.addWidget(self.input_filter_matching)
+
+        self.btn_toggle_matching = QPushButton("Comprimi ▲")
+        self.btn_toggle_matching.setFixedHeight(28)
+        self.btn_toggle_matching.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_toggle_matching.setStyleSheet("font-size: 11px; padding: 2px 10px; background: white; border: 1px solid #90CAF9; border-radius: 4px;")
+        self.btn_toggle_matching.clicked.connect(self._toggle_matching_products)
+        prod_hdr_layout.addWidget(self.btn_toggle_matching)
+
+        box_prod_layout.addLayout(prod_hdr_layout)
+
+        # Tabella Articoli Trovati
+        self.table_matching_products = QTableWidget()
+        self.table_matching_products.setColumnCount(7)
+        self.table_matching_products.setHorizontalHeaderLabels([
+            "Codice Articolo", "Descrizione", "Tipo / Categoria", "Costo STD", "Listino", "Disegno / B-Kode", "Codici Vecchi / Esploso"
+        ])
+        h_match = self.table_matching_products.horizontalHeader()
+        h_match.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        h_match.setStretchLastSection(True)
+        self.table_matching_products.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table_matching_products.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table_matching_products.setSortingEnabled(True)
+        self.table_matching_products.setMaximumHeight(180)
+        self.table_matching_products.setToolTip("Fai clic su un articolo per visualizzarne la Scheda 360°, lo storico vendite e gli acquisti")
+        self.table_matching_products.itemSelectionChanged.connect(self._on_matching_product_selected)
+        self.table_matching_products.cellClicked.connect(lambda r, c: self._on_matching_product_selected())
+        box_prod_layout.addWidget(self.table_matching_products)
+
+        self.box_matching_products.setVisible(False)
+        layout.addWidget(self.box_matching_products)
+
         # Scheda Riepilogo 360° Articolo (Box espandibile)
         self.box_360 = QGroupBox("Scheda Master Articolo & Equivalenze (360°)")
         self.box_360.setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #B0BEC5; border-radius: 6px; margin-top: 10px; padding: 10px; background-color: #FAFAFA; }")
@@ -286,13 +340,196 @@ class ArticleSearchWidget(QWidget):
     def perform_search(self):
         text = self.search_input.text().strip()
         if not text:
-            if not self.cb_incremental.isChecked():
-                self.table_purchases.setRowCount(0)
-                self.table_sales.setRowCount(0)
-                self.box_360.setVisible(False)
-                self.active_search_steps = []
+            self.table_purchases.setRowCount(0)
+            self.table_sales.setRowCount(0)
+            self.table_bom.setRowCount(0)
+            self.table_routing.setRowCount(0)
+            self.box_360.setVisible(False)
+            self.box_matching_products.setVisible(False)
+            self.active_search_steps = []
             return
-            
+
+        search_code = self.cb_code.isChecked()
+        search_desc = self.cb_desc.isChecked()
+        if not search_code and not search_desc:
+            search_code = search_desc = True
+
+        supplier_filter = self.combo_supplier.currentData()
+
+        # 1. Cerca gli articoli corrispondenti nel catalogo prodotti
+        matching_prods = self.controller.search_matching_products(
+            text, supplier_name=supplier_filter, search_code=search_code, search_desc=search_desc
+        )
+
+        if len(matching_prods) > 1:
+            # Mostra la lista degli articoli corrispondenti affinché l'utente possa selezionare l'articolo desiderato
+            self.display_matching_products(matching_prods, text)
+            self.box_360.setVisible(False)
+            self.table_purchases.setRowCount(0)
+            self.table_sales.setRowCount(0)
+            self.table_bom.setRowCount(0)
+            self.table_routing.setRowCount(0)
+            self.lbl_prod_cost_summary.setText("Fai clic su un articolo della lista sopra per visualizzare distinta, lavorazioni e storico vendite/acquisti.")
+            self.status_label.setText(
+                f"Trovati {len(matching_prods)} articoli corrispondenti a '{text}'. Clicca su un articolo per aprire la scheda dedicata."
+            )
+            return
+        elif len(matching_prods) == 1:
+            # Trovato esattamente 1 articolo corrispondente:
+            self.display_matching_products(matching_prods, text)
+            self.load_product_detail(matching_prods[0].code)
+            return
+        else:
+            # Nessun articolo a catalogo trovato per il testo:
+            # Cerca direttamente nelle righe fatture (fallback)
+            self.box_matching_products.setVisible(False)
+            self.box_360.setVisible(False)
+            self._perform_fallback_invoice_search(text, supplier_filter, search_code, search_desc)
+
+    def display_matching_products(self, products, query_text):
+        self.lbl_matching_products_title.setText(
+            f"📋 Trovati {len(products)} articoli per '{query_text}'. Clicca su un articolo per visualizzarne la scheda e lo storico dedicato:"
+        )
+        self.input_filter_matching.clear()
+
+        self.table_matching_products.blockSignals(True)
+        self.table_matching_products.setSortingEnabled(False)
+        self.table_matching_products.clearSelection()
+        self.table_matching_products.setRowCount(len(products))
+
+        for i, prod in enumerate(products):
+            item_code = SortableTableWidgetItem(prod.code)
+            item_code.setData(Qt.ItemDataRole.UserRole, prod.code)
+            self.table_matching_products.setItem(i, 0, item_code)
+
+            item_name = QTableWidgetItem(prod.name or "-")
+            item_name.setData(Qt.ItemDataRole.UserRole, prod.code)
+            self.table_matching_products.setItem(i, 1, item_name)
+
+            cat_str = f"{prod.type or ''} / {prod.category or 'Standard'}"
+            item_cat = QTableWidgetItem(cat_str)
+            item_cat.setData(Qt.ItemDataRole.UserRole, prod.code)
+            self.table_matching_products.setItem(i, 2, item_cat)
+
+            cost_val = float(prod.production_cost or 0.0)
+            cost_str = f"€ {cost_val:.2f}" if cost_val else "-"
+            item_cost = SortableTableWidgetItem(cost_str, sort_value=cost_val)
+            item_cost.setData(Qt.ItemDataRole.UserRole, prod.code)
+            self.table_matching_products.setItem(i, 3, item_cost)
+
+            list_val = float(prod.list_price or 0.0)
+            list_str = f"€ {list_val:.2f}" if list_val else "-"
+            item_list = SortableTableWidgetItem(list_str, sort_value=list_val)
+            item_list.setData(Qt.ItemDataRole.UserRole, prod.code)
+            self.table_matching_products.setItem(i, 4, item_list)
+
+            bkode_info = []
+            if prod.drawing_number:
+                bkode_info.append(f"Dis: {prod.drawing_number}")
+            if prod.bkode_id:
+                bkode_info.append(f"BK: {prod.bkode_id}")
+            item_bkode = QTableWidgetItem(" | ".join(bkode_info) if bkode_info else "-")
+            item_bkode.setData(Qt.ItemDataRole.UserRole, prod.code)
+            self.table_matching_products.setItem(i, 5, item_bkode)
+
+            leg_codes = [l.legacy_code for l in prod.legacy_codes if l.legacy_code]
+            item_leg = QTableWidgetItem(", ".join(leg_codes) if leg_codes else "-")
+            item_leg.setData(Qt.ItemDataRole.UserRole, prod.code)
+            self.table_matching_products.setItem(i, 6, item_leg)
+
+        self.table_matching_products.setSortingEnabled(True)
+        self.table_matching_products.blockSignals(False)
+        self.box_matching_products.setVisible(True)
+        self.table_matching_products.setVisible(True)
+        self.input_filter_matching.setVisible(True)
+        self.btn_toggle_matching.setText("Comprimi ▲")
+
+    def _toggle_matching_products(self):
+        is_vis = self.table_matching_products.isVisible()
+        self.table_matching_products.setVisible(not is_vis)
+        self.input_filter_matching.setVisible(not is_vis)
+        self.btn_toggle_matching.setText("Espandi Lista ▼" if is_vis else "Comprimi ▲")
+
+    def _filter_matching_products_table(self):
+        text = self.input_filter_matching.text().strip().lower()
+        for row in range(self.table_matching_products.rowCount()):
+            if not text:
+                self.table_matching_products.setRowHidden(row, False)
+                continue
+            match = False
+            for col in range(self.table_matching_products.columnCount()):
+                item = self.table_matching_products.item(row, col)
+                if item and text in item.text().lower():
+                    match = True
+                    break
+            self.table_matching_products.setRowHidden(row, not match)
+
+    def _on_matching_product_selected(self):
+        row = self.table_matching_products.currentRow()
+        prod_code = None
+        if row >= 0:
+            item = self.table_matching_products.item(row, 0)
+            if item:
+                prod_code = item.data(Qt.ItemDataRole.UserRole)
+
+        if not prod_code:
+            selected = self.table_matching_products.selectedItems()
+            if selected:
+                prod_code = selected[0].data(Qt.ItemDataRole.UserRole)
+                if not prod_code and selected[0].row() >= 0:
+                    it0 = self.table_matching_products.item(selected[0].row(), 0)
+                    if it0:
+                        prod_code = it0.data(Qt.ItemDataRole.UserRole)
+
+        if prod_code:
+            self.load_product_detail(prod_code)
+
+    def load_product_detail(self, product_code: str):
+        prod_360 = self.controller.get_product_360(product_code)
+        if not prod_360 or not prod_360.get('product'):
+            self.box_360.setVisible(False)
+            return
+
+        prod = prod_360['product']
+        self.display_product_360(prod_360)
+
+        # Costruisce codici equivalenti ESCLUSIVAMENTE per questo articolo
+        equivalent_codes = [prod.code]
+        for leg in prod_360.get('legacy_codes', []):
+            lc = (leg.legacy_code or '').strip()
+            if lc and len(lc) >= 2:
+                equivalent_codes.append(lc)
+        for sp in prod_360.get('supplier_products', []):
+            sc = (sp.supplier_code or '').strip()
+            if sc and len(sc) >= 2:
+                equivalent_codes.append(sc)
+
+        supplier_filter = self.combo_supplier.currentData()
+        current_step = {
+            'words': [],
+            'search_code': True,
+            'search_desc': False,
+            'supplier': supplier_filter,
+            'equivalent_codes': equivalent_codes
+        }
+
+        try:
+            p_results = self.controller.search_items([current_step])
+            self.last_p_results = p_results
+            self.display_purchases(p_results)
+
+            s_results = self.controller.search_sales_items([current_step])
+            self.last_s_results = s_results
+            self.display_sales(s_results)
+
+            self.status_label.setText(
+                f"Scheda Articolo: {prod.code} - {prod.name} | "
+                f"Risultati: {len(p_results)} righe acquisto | {len(s_results)} righe vendita trovate."
+            )
+        except Exception as e:
+            self.status_label.setText(f"Errore caricamento storico articolo: {e}")
+
+    def _perform_fallback_invoice_search(self, text, supplier_filter, search_code, search_desc):
         norm_text = re.sub(r'\b([a-zA-Z])\s+(\d+)\b', r'\1\2', text, flags=re.IGNORECASE)
         stopwords = {'il', 'lo', 'la', 'i', 'gli', 'le', 'di', 'da', 'in', 'con', 'su', 'per', 'del', 'della', 'dei', 'degli'}
         raw_words = [w for w in re.split(r'[\s%]+', norm_text) if w]
@@ -300,61 +537,33 @@ class ArticleSearchWidget(QWidget):
         if not words and raw_words:
             words = raw_words
 
-        search_code = self.cb_code.isChecked()
-        search_desc = self.cb_desc.isChecked()
-        if not search_code and not search_desc:
-            search_code = search_desc = True
-            
-        supplier_filter = self.combo_supplier.currentData()
-
-        # 1. Cerca prima la Scheda 360° Articolo Master per estrarre tutti i vecchi codici collegati (legacy)
-        prod_360 = self.controller.get_product_360(text)
-        self.display_product_360(prod_360)
-
-        equivalent_codes = []
-        GENERIC_STOPWORDS = {'MAV', 'ECOL', 'ICT', 'TERMO', 'RIG', 'LX', 'MINI', 'C87', 'DOC', 'NR', 'PAG', 'TH'}
-        if prod_360 and prod_360.get('product'):
-            p_obj = prod_360['product']
-            if p_obj.code and p_obj.code.upper() not in GENERIC_STOPWORDS:
-                equivalent_codes.append(p_obj.code)
-            for leg in prod_360.get('legacy_codes', []):
-                lc = (leg.legacy_code or '').strip()
-                if lc and lc.upper() not in GENERIC_STOPWORDS and len(lc) >= 2:
-                    equivalent_codes.append(lc)
-            for sp in prod_360.get('supplier_products', []):
-                sc = (sp.supplier_code or '').strip()
-                if sc and sc.upper() not in GENERIC_STOPWORDS and len(sc) >= 2:
-                    equivalent_codes.append(sc)
-
         current_step = {
             'words': words,
             'search_code': search_code,
             'search_desc': search_desc,
             'supplier': supplier_filter,
-            'equivalent_codes': equivalent_codes
+            'equivalent_codes': []
         }
-        
+
         if not self.cb_incremental.isChecked():
             self.active_search_steps = [current_step]
         else:
             self.active_search_steps.append(current_step)
-            
+
         try:
-            # 2. Cerca Acquisti Fornitori
             p_results = self.controller.search_items(self.active_search_steps)
             self.last_p_results = p_results
             self.display_purchases(p_results)
 
-            # 3. Cerca Vendite Clienti (includendo sia il codice nuovo che i vecchi codici storici)
             s_results = self.controller.search_sales_items(self.active_search_steps)
             self.last_s_results = s_results
             self.display_sales(s_results)
 
             self.status_label.setText(
-                f"Risultati: {len(p_results)} righe acquisto | {len(s_results)} righe vendita trovate."
+                f"Nessun articolo a catalogo. Storico fatture: {len(p_results)} righe acquisto | {len(s_results)} righe vendita trovate per '{text}'."
             )
         except Exception as e:
-            self.status_label.setText(f"Errore durante la ricerca: {e}")
+            self.status_label.setText(f"Errore durante la ricerca fatture: {e}")
             if self.cb_incremental.isChecked():
                 self.active_search_steps.pop()
 
