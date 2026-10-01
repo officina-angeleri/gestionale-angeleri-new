@@ -69,6 +69,7 @@ class SuppliersWidget(QWidget):
         self.table_suppliers.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table_suppliers.setSortingEnabled(True)
         self.table_suppliers.itemSelectionChanged.connect(self.on_supplier_selected)
+        self.table_suppliers.cellClicked.connect(lambda r, c: self.on_supplier_selected())
         left_layout.addWidget(self.table_suppliers)
 
         self.lbl_count = QLabel("Caricamento fornitori...")
@@ -81,6 +82,7 @@ class SuppliersWidget(QWidget):
         right_layout = QVBoxLayout(self.right_panel)
         right_layout.setContentsMargins(10, 0, 0, 0)
 
+        # Intestazione Scheda
         self.box_info = QGroupBox("Scheda Dettaglio Fornitore")
         self.box_info.setStyleSheet("QGroupBox { font-weight: bold; font-size: 14px; }")
         info_layout = QFormLayout(self.box_info)
@@ -127,7 +129,9 @@ class SuppliersWidget(QWidget):
         filter_type = self.combo_filter.currentData() or "all"
         data = self.controller.get_suppliers_summary(query, filter_type=filter_type)
 
+        self.table_suppliers.blockSignals(True)
         self.table_suppliers.setSortingEnabled(False)
+        self.table_suppliers.clearSelection()
         self.table_suppliers.setRowCount(len(data))
 
         for i, row in enumerate(data):
@@ -137,29 +141,65 @@ class SuppliersWidget(QWidget):
             item_name.setData(Qt.ItemDataRole.UserRole, s_id)
             self.table_suppliers.setItem(i, 0, item_name)
             
-            self.table_suppliers.setItem(i, 1, QTableWidgetItem(piva or "-"))
-            self.table_suppliers.setItem(i, 2, SortableTableWidgetItem(str(num_fat), sort_value=num_fat))
-            self.table_suppliers.setItem(i, 3, SortableTableWidgetItem(str(num_art), sort_value=num_art))
-            self.table_suppliers.setItem(i, 4, SortableTableWidgetItem(f"€ {tot_spent:,.2f}", sort_value=tot_spent))
+            item_piva = QTableWidgetItem(piva or "-")
+            item_piva.setData(Qt.ItemDataRole.UserRole, s_id)
+            self.table_suppliers.setItem(i, 1, item_piva)
+
+            item_fat = SortableTableWidgetItem(str(num_fat), sort_value=num_fat)
+            item_fat.setData(Qt.ItemDataRole.UserRole, s_id)
+            self.table_suppliers.setItem(i, 2, item_fat)
+
+            item_art = SortableTableWidgetItem(str(num_art), sort_value=num_art)
+            item_art.setData(Qt.ItemDataRole.UserRole, s_id)
+            self.table_suppliers.setItem(i, 3, item_art)
+
+            item_spent = SortableTableWidgetItem(f"€ {tot_spent:,.2f}", sort_value=tot_spent)
+            item_spent.setData(Qt.ItemDataRole.UserRole, s_id)
+            self.table_suppliers.setItem(i, 4, item_spent)
             
             date_str = last_date.strftime("%d/%m/%Y") if last_date else "-"
-            self.table_suppliers.setItem(i, 5, SortableTableWidgetItem(date_str, sort_value=last_date or ""))
+            item_date = SortableTableWidgetItem(date_str, sort_value=last_date or "")
+            item_date.setData(Qt.ItemDataRole.UserRole, s_id)
+            self.table_suppliers.setItem(i, 5, item_date)
 
         self.table_suppliers.setSortingEnabled(True)
         # Se non c'è una ricerca attiva, mantieni ordinamento per spesa totale decrescente
         if not query and len(data) > 0:
             self.table_suppliers.sortByColumn(4, Qt.SortOrder.DescendingOrder)
+        self.table_suppliers.blockSignals(False)
 
         self.lbl_count.setText(f"Trovati {len(data)} fornitori.")
 
-        if len(data) > 0 and not self.table_suppliers.selectedItems():
+        if len(data) > 0:
             self.table_suppliers.selectRow(0)
+            self.on_supplier_selected()
+        else:
+            self.clear_detail()
+
+    def clear_detail(self):
+        self.lbl_name.setText("-")
+        self.lbl_piva.setText("-")
+        self.lbl_totals.setText("-")
+        self.table_invoices.setRowCount(0)
+        self.table_products.setRowCount(0)
 
     def on_supplier_selected(self):
-        selected = self.table_suppliers.selectedItems()
-        if not selected:
-            return
-        supplier_id = selected[0].data(Qt.ItemDataRole.UserRole)
+        row = self.table_suppliers.currentRow()
+        supplier_id = None
+        if row >= 0:
+            item = self.table_suppliers.item(row, 0)
+            if item:
+                supplier_id = item.data(Qt.ItemDataRole.UserRole)
+
+        if not supplier_id:
+            selected = self.table_suppliers.selectedItems()
+            if selected:
+                supplier_id = selected[0].data(Qt.ItemDataRole.UserRole)
+                if not supplier_id and selected[0].row() >= 0:
+                    it0 = self.table_suppliers.item(selected[0].row(), 0)
+                    if it0:
+                        supplier_id = it0.data(Qt.ItemDataRole.UserRole)
+
         if not supplier_id:
             return
 

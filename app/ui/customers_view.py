@@ -60,6 +60,7 @@ class CustomersWidget(QWidget):
         self.table_customers.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table_customers.setSortingEnabled(True)
         self.table_customers.itemSelectionChanged.connect(self.on_customer_selected)
+        self.table_customers.cellClicked.connect(lambda r, c: self.on_customer_selected())
         left_layout.addWidget(self.table_customers)
 
         self.lbl_count = QLabel("Caricamento clienti...")
@@ -124,7 +125,9 @@ class CustomersWidget(QWidget):
         query = self.search_input.text().strip()
         data = self.controller.get_customers_summary(query)
 
+        self.table_customers.blockSignals(True)
         self.table_customers.setSortingEnabled(False)
+        self.table_customers.clearSelection()
         self.table_customers.setRowCount(len(data))
 
         for i, row in enumerate(data):
@@ -134,25 +137,62 @@ class CustomersWidget(QWidget):
             item_name.setData(Qt.ItemDataRole.UserRole, c_id)
             self.table_customers.setItem(i, 0, item_name)
             
-            self.table_customers.setItem(i, 1, QTableWidgetItem(piva or "-"))
-            self.table_customers.setItem(i, 2, QTableWidgetItem(country or "IT"))
-            self.table_customers.setItem(i, 3, SortableTableWidgetItem(str(num_fat), sort_value=num_fat))
-            self.table_customers.setItem(i, 4, SortableTableWidgetItem(f"€ {tot_rev:,.2f}", sort_value=tot_rev))
+            item_piva = QTableWidgetItem(piva or "-")
+            item_piva.setData(Qt.ItemDataRole.UserRole, c_id)
+            self.table_customers.setItem(i, 1, item_piva)
+
+            item_country = QTableWidgetItem(country or "IT")
+            item_country.setData(Qt.ItemDataRole.UserRole, c_id)
+            self.table_customers.setItem(i, 2, item_country)
+
+            item_num = SortableTableWidgetItem(str(num_fat), sort_value=num_fat)
+            item_num.setData(Qt.ItemDataRole.UserRole, c_id)
+            self.table_customers.setItem(i, 3, item_num)
+
+            item_rev = SortableTableWidgetItem(f"€ {tot_rev:,.2f}", sort_value=tot_rev)
+            item_rev.setData(Qt.ItemDataRole.UserRole, c_id)
+            self.table_customers.setItem(i, 4, item_rev)
             
             date_str = last_date.strftime("%d/%m/%Y") if last_date else "-"
-            self.table_customers.setItem(i, 5, SortableTableWidgetItem(date_str, sort_value=last_date or ""))
+            item_date = SortableTableWidgetItem(date_str, sort_value=last_date or "")
+            item_date.setData(Qt.ItemDataRole.UserRole, c_id)
+            self.table_customers.setItem(i, 5, item_date)
 
         self.table_customers.setSortingEnabled(True)
+        self.table_customers.blockSignals(False)
         self.lbl_count.setText(f"Trovati {len(data)} clienti.")
 
-        if len(data) > 0 and not self.table_customers.selectedItems():
+        if len(data) > 0:
             self.table_customers.selectRow(0)
+            self.on_customer_selected()
+        else:
+            self.clear_detail()
+
+    def clear_detail(self):
+        self.lbl_name.setText("-")
+        self.lbl_piva.setText("-")
+        self.lbl_address.setText("-")
+        self.lbl_totals.setText("-")
+        self.table_invoices.setRowCount(0)
+        self.table_items.setRowCount(0)
 
     def on_customer_selected(self):
-        selected = self.table_customers.selectedItems()
-        if not selected:
-            return
-        customer_id = selected[0].data(Qt.ItemDataRole.UserRole)
+        row = self.table_customers.currentRow()
+        customer_id = None
+        if row >= 0:
+            item = self.table_customers.item(row, 0)
+            if item:
+                customer_id = item.data(Qt.ItemDataRole.UserRole)
+
+        if not customer_id:
+            selected = self.table_customers.selectedItems()
+            if selected:
+                customer_id = selected[0].data(Qt.ItemDataRole.UserRole)
+                if not customer_id and selected[0].row() >= 0:
+                    it0 = self.table_customers.item(selected[0].row(), 0)
+                    if it0:
+                        customer_id = it0.data(Qt.ItemDataRole.UserRole)
+
         if not customer_id:
             return
 
