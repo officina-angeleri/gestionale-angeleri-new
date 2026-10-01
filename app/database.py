@@ -77,6 +77,7 @@ class Product(Base):
     purchase_items = relationship("InvoiceItem", back_populates="product")
     sales_items = relationship("SalesInvoiceItem", back_populates="product")
     exploded_items = relationship("ExplodedDiagramItem", back_populates="product")
+    price_items = relationship("PriceListItem", back_populates="product")
 
     # Retro-compatibilità con vecchio codice che usa `items`
     items = relationship("InvoiceItem", back_populates="product", viewonly=True)
@@ -366,10 +367,87 @@ class ExplodedDiagramItem(Base):
         return f"<ExplodedDiagramItem(pos='{self.position_num}', part='{self.part_code}', desc='{self.description[:25]}')>"
 
 
+# ==========================================
+# LISTINI PREZZI (ACQUISTI & VENDITE)
+# ==========================================
+
+class PriceList(Base):
+    """Listini prezzi ufficiali da B-Kode (lisforList / liscliList)."""
+    __tablename__ = 'price_lists'
+
+    id = Column(Integer, primary_key=True)
+    bkode_id = Column(Integer, unique=True, nullable=True, index=True)
+    list_type = Column(String(20), nullable=False, index=True) # 'PURCHASE' (Fornitori) o 'SALE' (Clienti)
+    code = Column(String(50), nullable=True) # es. '10', 'E1'
+    description = Column(String(255), nullable=True) # es. 'quotazioni', 'LISTINO CEE XCEE EURO'
+    partner_name = Column(String(255), nullable=True)
+    supplier_id = Column(Integer, ForeignKey('suppliers.id'), nullable=True, index=True)
+    customer_id = Column(Integer, ForeignKey('customers.id'), nullable=True, index=True)
+    currency = Column(String(10), default='EUR')
+    valid_from = Column(Date, nullable=True)
+    valid_to = Column(Date, nullable=True)
+    status = Column(String(20), default='ATTIVO') # 'ATTIVO', 'CHIUSO'
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    supplier = relationship("Supplier")
+    customer = relationship("Customer")
+    items = relationship("PriceListItem", back_populates="price_list", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<PriceList(id={self.id}, type='{self.list_type}', code='{self.code}', partner='{self.partner_name}')>"
+
+
+class PriceListItem(Base):
+    """Righe articolo all'interno dei listini prezzi (lisforListR / liscliListR)."""
+    __tablename__ = 'price_list_items'
+
+    id = Column(Integer, primary_key=True)
+    price_list_id = Column(Integer, ForeignKey('price_lists.id'), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=True, index=True)
+    product_code = Column(String(100), nullable=False, index=True)
+    description = Column(String(500), nullable=True)
+    drawing_number = Column(String(100), nullable=True)
+    unit_measure = Column(String(20), default='NR')
+    base_price = Column(Float, default=0.0) # Prezzo base da listino
+    discount_1 = Column(Float, default=0.0) # Sconto 1 (%)
+    discount_2 = Column(Float, default=0.0) # Sconto 2 (%)
+    discount_3 = Column(Float, default=0.0) # Sconto 3 (%)
+    net_price = Column(Float, default=0.0) # Prezzo calcolato netto
+    valid_from = Column(Date, nullable=True)
+    valid_to = Column(Date, nullable=True)
+
+    price_list = relationship("PriceList", back_populates="items")
+    product = relationship("Product", back_populates="price_items")
+
+    def __repr__(self):
+        return f"<PriceListItem(code='{self.product_code}', base={self.base_price}, net={self.net_price})>"
+
+
+# ==========================================
+# STATO SINCRONIZZAZIONE AUTOMATICA B-KODE
+# ==========================================
+
+class SyncStatus(Base):
+    """Tracciamento dello stato di sincronizzazione in background per evitare concorrenza."""
+    __tablename__ = 'sync_status'
+
+    task_name = Column(String(50), primary_key=True) # 'INVOICES_SALES', 'INVOICES_PURCHASES', 'PRODUCTS', 'PRICELISTS'
+    last_sync_time = Column(DateTime, nullable=True)
+    status = Column(String(20), default='IDLE') # 'IDLE', 'RUNNING', 'SUCCESS', 'ERROR'
+    executed_by_host = Column(String(100), nullable=True) # Nome host PC officina
+    items_synced = Column(Integer, default=0)
+    last_error = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<SyncStatus(task='{self.task_name}', status='{self.status}', last='{self.last_sync_time}')>"
+
+
 # Indici per ricerche veloci
 Index('idx_sales_inv_uniq', SalesInvoice.customer_id, SalesInvoice.year, SalesInvoice.number, unique=True)
 Index('idx_purch_inv_uniq', Invoice.supplier_id, Invoice.date, Invoice.number)
 Index('idx_exploded_item_search', ExplodedDiagramItem.part_code, ExplodedDiagramItem.old_position_code)
+Index('idx_price_list_item_search', PriceListItem.product_code, PriceListItem.price_list_id)
 
 
 

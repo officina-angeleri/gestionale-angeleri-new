@@ -27,6 +27,14 @@ class MainWindow(QMainWindow):
         
         self.init_ui()
         
+        # Inizializza Background Sync B-Kode distribuito
+        from app.utils.background_sync import BackgroundSyncManager
+        from app.utils.settings import SettingsManager
+        interval = SettingsManager().get_bkode_sync_interval()
+        self.sync_manager = BackgroundSyncManager(interval_minutes=interval, parent=self)
+        self.sync_manager.status_updated.connect(self._on_bkode_sync_updated)
+        self.sync_manager.start()
+        
     def init_ui(self):
         main_container = QWidget()
         main_layout = QHBoxLayout(main_container)
@@ -170,6 +178,11 @@ class MainWindow(QMainWindow):
         btn_refresh.clicked.connect(self.refresh_current_view)
         sidebar_layout.addWidget(btn_refresh)
 
+        btn_bkode = QPushButton("🔄  B-Kode Cloud")
+        btn_bkode.setStyleSheet("font-size: 12px; color: #94A3B8;")
+        btn_bkode.clicked.connect(self.show_bkode_dialog)
+        sidebar_layout.addWidget(btn_bkode)
+
         btn_db = QPushButton("💾  Database (Synology)")
         btn_db.setStyleSheet("font-size: 12px; color: #94A3B8;")
         btn_db.clicked.connect(self.change_database)
@@ -225,6 +238,14 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Connesso al server Synology DS920+ (angeleri_db)")
 
+        self.btn_bkode_status = QPushButton("🟢 B-Kode: In ascolto")
+        self.btn_bkode_status.setFlat(True)
+        self.btn_bkode_status.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_bkode_status.setStyleSheet("color: #2E7D32; font-weight: bold; font-size: 11px;")
+        self.btn_bkode_status.setToolTip("Stato sincronizzazione automatica B-Kode. Clicca per configurare o forzare la sincronizzazione.")
+        self.btn_bkode_status.clicked.connect(self.show_bkode_dialog)
+        self.status_bar.addPermanentWidget(self.btn_bkode_status)
+
     def switch_view(self, index):
         self.central_stack.setCurrentIndex(index)
         self.refresh_current_view()
@@ -233,6 +254,25 @@ class MainWindow(QMainWindow):
         dlg = ImportDialog(self.controller, self)
         if dlg.exec():
             self.refresh_current_view()
+
+    def show_bkode_dialog(self):
+        from app.ui.bkode_config_dialog import BKodeConfigDialog
+        dlg = BKodeConfigDialog(self)
+        dlg.sync_requested.connect(self.refresh_current_view)
+        dlg.exec()
+
+    def _on_bkode_sync_updated(self, msg: str):
+        self.status_bar.showMessage(msg, 10000)
+        if hasattr(self, 'btn_bkode_status'):
+            if "completata" in msg.lower():
+                self.btn_bkode_status.setText("🟢 B-Kode: Sincronizzato")
+            elif "altra postazione" in msg.lower():
+                self.btn_bkode_status.setText("🟡 B-Kode: Altra postazione attiva")
+            elif "fallit" in msg.lower() or "error" in msg.lower():
+                self.btn_bkode_status.setText("🔴 B-Kode: Errore credenziali")
+            else:
+                self.btn_bkode_status.setText("🟢 B-Kode: Attivo")
+            self.btn_bkode_status.setToolTip(msg)
 
     def refresh_current_view(self):
         current = self.central_stack.currentWidget()

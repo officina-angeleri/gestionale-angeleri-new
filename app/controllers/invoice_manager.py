@@ -1077,5 +1077,75 @@ class InvoiceManager:
         except Exception as e:
             return {'status': 'error', 'message': f"Errore durante l'importazione: {e}"}
 
+    def get_product_price_lists(self, product_code: str) -> dict:
+        """
+        Recupera i listini ufficiali B-Kode (Acquisti fornitori e Vendite clienti) per un codice articolo.
+        Supporta matching sul codice master e ricerca per codice senza suffissi.
+        """
+        if not product_code or not product_code.strip():
+            return {'purchase_lists': [], 'sales_lists': []}
+            
+        from app.database import PriceList, PriceListItem, Product
+        from sqlalchemy.orm import joinedload
+        
+        clean_code = product_code.strip()
+        
+        # 1. Cerca righe listino collegate direttamente al codice o al prodotto
+        items = (self.session.query(PriceListItem)
+                 .options(joinedload(PriceListItem.price_list))
+                 .filter(PriceListItem.product_code.ilike(clean_code))
+                 .all())
+                 
+        if not items:
+            # Fallback: ricerca tramite Product
+            prod = self.session.query(Product).filter(Product.code.ilike(clean_code)).first()
+            if prod:
+                items = (self.session.query(PriceListItem)
+                         .options(joinedload(PriceListItem.price_list))
+                         .filter((PriceListItem.product_id == prod.id) | (PriceListItem.product_code.ilike(prod.code)))
+                         .all())
+
+        purchase_lists = []
+        sales_lists = []
+
+        for it in items:
+            pl = it.price_list
+            if not pl:
+                continue
+                
+            entry = {
+                'price_list_id': pl.id,
+                'list_code': pl.code or '',
+                'list_description': pl.description or '',
+                'partner_name': pl.partner_name or '',
+                'currency': pl.currency or 'EUR',
+                'status': pl.status or 'ATTIVO',
+                'valid_from': pl.valid_from.strftime('%d/%m/%Y') if pl.valid_from else '',
+                'valid_to': pl.valid_to.strftime('%d/%m/%Y') if pl.valid_to else '',
+                'product_code': it.product_code,
+                'item_description': it.description or '',
+                'unit_measure': it.unit_measure or 'NR',
+                'base_price': it.base_price or 0.0,
+                'discount_1': it.discount_1 or 0.0,
+                'discount_2': it.discount_2 or 0.0,
+                'discount_3': it.discount_3 or 0.0,
+                'net_price': it.net_price or it.base_price or 0.0
+            }
+            
+            if pl.list_type == 'PURCHASE':
+                purchase_lists.append(entry)
+            else:
+                sales_lists.append(entry)
+                
+        # Ordina per stato attivo e prezzo
+        purchase_lists.sort(key=lambda x: (x['status'] == 'ATTIVO', x['net_price']), reverse=True)
+        sales_lists.sort(key=lambda x: (x['status'] == 'ATTIVO', x['net_price']), reverse=True)
+
+        return {
+            'purchase_lists': purchase_lists,
+            'sales_lists': sales_lists
+        }
+
+
 
 

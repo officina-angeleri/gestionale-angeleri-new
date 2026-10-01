@@ -41,6 +41,8 @@ def build(one_file=False):
         '--hidden-import=openpyxl',
         '--hidden-import=typing_extensions',
         '--hidden-import=anyio',
+        '--hidden-import=requests',
+        '--hidden-import=urllib3',
         '--exclude-module=tkinter',
     ]
 

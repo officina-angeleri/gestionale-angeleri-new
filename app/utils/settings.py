@@ -61,3 +61,31 @@ class SettingsManager:
     def set_gemini_model(self, model):
         self.settings['gemini_model'] = model
         self.save_settings()
+
+    def get_bkode_username(self):
+        return self.settings.get('bkode_username', 'ma002')
+
+    def set_bkode_username(self, username):
+        self.settings['bkode_username'] = username.strip() if username else ''
+        self.save_settings()
+
+    def get_bkode_password(self):
+        return self.settings.get('bkode_password', '')
+
+    def set_bkode_password(self, password):
+        self.settings['bkode_password'] = password
+        self.save_settings()
+
+    def get_bkode_cookie(self):
+        return self.settings.get('bkode_cookie', '')
+
+    def set_bkode_cookie(self, cookie):
+        self.settings['bkode_cookie'] = cookie.strip() if cookie else ''
+        self.save_settings()
+
+    def get_bkode_sync_interval(self):
+        return int(self.settings.get('bkode_sync_interval', 15))
+
+    def set_bkode_sync_interval(self, minutes):
+        self.settings['bkode_sync_interval'] = int(minutes)
+        self.save_settings()

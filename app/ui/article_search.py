@@ -173,21 +173,26 @@ class ArticleSearchWidget(QWidget):
         self.box_360_layout.addWidget(self.lbl_art_legacy, 2, 0, 1, 2)
         self.box_360_layout.addWidget(self.lbl_art_supp, 2, 2, 1, 2)
 
-        # Riga 3: Esplosi Macchine collegati & Apertura diretta PDF
+        # Riga 3: Listini Ufficiali B-Kode (Acquisto / Vendita)
+        self.lbl_art_price_lists = QLabel("Listini B-Kode: In attesa selezione...")
+        self.lbl_art_price_lists.setStyleSheet("color: #E65100; font-weight: bold;")
+        self.box_360_layout.addWidget(self.lbl_art_price_lists, 3, 0, 1, 4)
+
+        # Riga 4: Esplosi Macchine collegati & Apertura diretta PDF
         lbl_diag_title = QLabel("📖 Esplosi Macchine:")
         lbl_diag_title.setStyleSheet("color: #2E7D32; font-weight: bold;")
-        self.box_360_layout.addWidget(lbl_diag_title, 3, 0)
+        self.box_360_layout.addWidget(lbl_diag_title, 4, 0)
         
         self.widget_diagrams_container = QWidget()
         self.layout_diagrams_btns = QHBoxLayout(self.widget_diagrams_container)
         self.layout_diagrams_btns.setContentsMargins(0, 0, 0, 0)
         self.layout_diagrams_btns.setSpacing(8)
-        self.box_360_layout.addWidget(self.widget_diagrams_container, 3, 1, 1, 3)
+        self.box_360_layout.addWidget(self.widget_diagrams_container, 4, 1, 1, 3)
 
-        # Riga 4: Dati Produzione / Conversione / Disegno B-Kode
+        # Riga 5: Dati Produzione / Conversione / Disegno B-Kode
         self.lbl_art_bkode = QLabel("Produzione & Conversione B-Kode: -")
         self.lbl_art_bkode.setStyleSheet("color: #4527A0; font-weight: bold;")
-        self.box_360_layout.addWidget(self.lbl_art_bkode, 4, 0, 1, 4)
+        self.box_360_layout.addWidget(self.lbl_art_bkode, 5, 0, 1, 4)
         
         self.box_360.setVisible(False) # Visibile solo quando c'è un riscontro
         layout.addWidget(self.box_360)
@@ -295,9 +300,45 @@ class ArticleSearchWidget(QWidget):
         self.lbl_prod_cost_summary.setStyleSheet(
             "background-color: #263238; color: #ECEFF1; font-weight: bold; font-size: 13px; padding: 8px 12px; border-radius: 4px;"
         )
-        tab_prod_layout.addWidget(self.lbl_prod_cost_summary)
-
         self.tabs.addTab(self.tab_production, "Distinta Base & Lavorazioni (Produzione)")
+
+        # TAB 4: LISTINI UFFICIALI B-KODE (Acquisti & Vendite)
+        self.tab_pricelists = QWidget()
+        tab_pl_layout = QVBoxLayout(self.tab_pricelists)
+        
+        lbl_p_pl = QLabel("🏷️ Listini di Acquisto Fornitori:")
+        lbl_p_pl.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        tab_pl_layout.addWidget(lbl_p_pl)
+        
+        self.table_purchase_prices = QTableWidget()
+        self.table_purchase_prices.setColumnCount(9)
+        self.table_purchase_prices.setHorizontalHeaderLabels([
+            "Cod. Listino", "Descrizione Listino", "Fornitore", "U.M.",
+            "Prezzo Base", "Sc. 1 %", "Sc. 2 %", "Prezzo Netto", "Validità"
+        ])
+        header_pp = self.table_purchase_prices.horizontalHeader()
+        header_pp.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header_pp.setStretchLastSection(True)
+        self.table_purchase_prices.setSortingEnabled(True)
+        tab_pl_layout.addWidget(self.table_purchase_prices)
+        
+        lbl_s_pl = QLabel("💰 Listini di Vendita Clienti:")
+        lbl_s_pl.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        tab_pl_layout.addWidget(lbl_s_pl)
+        
+        self.table_sales_prices = QTableWidget()
+        self.table_sales_prices.setColumnCount(8)
+        self.table_sales_prices.setHorizontalHeaderLabels([
+            "Cod. Listino", "Descrizione Listino", "Cliente / Destinatario", "U.M.",
+            "Prezzo Base", "Sconto %", "Prezzo Netto", "Validità"
+        ])
+        header_sp = self.table_sales_prices.horizontalHeader()
+        header_sp.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header_sp.setStretchLastSection(True)
+        self.table_sales_prices.setSortingEnabled(True)
+        tab_pl_layout.addWidget(self.table_sales_prices)
+        
+        self.tabs.addTab(self.tab_pricelists, "Listini Ufficiali (Acquisto / Vendita)")
 
         layout.addWidget(self.tabs)
         
@@ -522,12 +563,89 @@ class ArticleSearchWidget(QWidget):
             self.last_s_results = s_results
             self.display_sales(s_results)
 
+            price_data = self.controller.get_product_price_lists(prod.code)
+            self.display_price_lists(price_data)
+
             self.status_label.setText(
                 f"Scheda Articolo: {prod.code} - {prod.name} | "
-                f"Risultati: {len(p_results)} righe acquisto | {len(s_results)} righe vendita trovate."
+                f"Risultati: {len(p_results)} righe acquisto | {len(s_results)} righe vendita | "
+                f"{len(price_data.get('purchase_lists', []))} listini acquisto | {len(price_data.get('sales_lists', []))} listini vendita."
             )
         except Exception as e:
             self.status_label.setText(f"Errore caricamento storico articolo: {e}")
+
+    def display_price_lists(self, price_data: dict):
+        p_lists = price_data.get('purchase_lists', [])
+        s_lists = price_data.get('sales_lists', [])
+
+        # 1. Popola tabella Acquisti
+        self.table_purchase_prices.setRowCount(len(p_lists))
+        for row, it in enumerate(p_lists):
+            self.table_purchase_prices.setItem(row, 0, QTableWidgetItem(it.get('list_code', '')))
+            self.table_purchase_prices.setItem(row, 1, QTableWidgetItem(it.get('list_description', '')))
+            self.table_purchase_prices.setItem(row, 2, QTableWidgetItem(it.get('partner_name', '')))
+            self.table_purchase_prices.setItem(row, 3, QTableWidgetItem(it.get('unit_measure', 'NR')))
+            
+            bp = it.get('base_price', 0.0)
+            self.table_purchase_prices.setItem(row, 4, SortableTableWidgetItem(f"€ {bp:.2f}" if bp else "-", sort_value=bp))
+            
+            sc1 = it.get('discount_1', 0.0)
+            self.table_purchase_prices.setItem(row, 5, SortableTableWidgetItem(f"{sc1:.1f}%" if sc1 else "-", sort_value=sc1))
+            
+            sc2 = it.get('discount_2', 0.0)
+            self.table_purchase_prices.setItem(row, 6, SortableTableWidgetItem(f"{sc2:.1f}%" if sc2 else "-", sort_value=sc2))
+            
+            net = it.get('net_price', bp)
+            item_net = SortableTableWidgetItem(f"€ {net:.2f}" if net else "-", sort_value=net)
+            self.table_purchase_prices.setItem(row, 7, item_net)
+            
+            validity = []
+            if it.get('valid_from'):
+                validity.append(f"Dal {it['valid_from']}")
+            if it.get('valid_to'):
+                validity.append(f"Al {it['valid_to']}")
+            self.table_purchase_prices.setItem(row, 8, QTableWidgetItem(" ".join(validity) if validity else "Sempre valido"))
+
+        # 2. Popola tabella Vendite
+        self.table_sales_prices.setRowCount(len(s_lists))
+        for row, it in enumerate(s_lists):
+            self.table_sales_prices.setItem(row, 0, QTableWidgetItem(it.get('list_code', '')))
+            self.table_sales_prices.setItem(row, 1, QTableWidgetItem(it.get('list_description', '')))
+            self.table_sales_prices.setItem(row, 2, QTableWidgetItem(it.get('partner_name', 'Listino Generale')))
+            self.table_sales_prices.setItem(row, 3, QTableWidgetItem(it.get('unit_measure', 'NR')))
+            
+            bp = it.get('base_price', 0.0)
+            self.table_sales_prices.setItem(row, 4, SortableTableWidgetItem(f"€ {bp:.2f}" if bp else "-", sort_value=bp))
+            
+            sc1 = it.get('discount_1', 0.0)
+            self.table_sales_prices.setItem(row, 5, SortableTableWidgetItem(f"{sc1:.1f}%" if sc1 else "-", sort_value=sc1))
+            
+            net = it.get('net_price', bp)
+            item_net = SortableTableWidgetItem(f"€ {net:.2f}" if net else "-", sort_value=net)
+            self.table_sales_prices.setItem(row, 6, item_net)
+            
+            validity = []
+            if it.get('valid_from'):
+                validity.append(f"Dal {it['valid_from']}")
+            if it.get('valid_to'):
+                validity.append(f"Al {it['valid_to']}")
+            self.table_sales_prices.setItem(row, 7, QTableWidgetItem(" ".join(validity) if validity else "Sempre valido"))
+
+        # 3. Aggiorna riga box_360
+        info_parts = []
+        if p_lists:
+            top_p = p_lists[0]
+            disc_str = f" (sc. {top_p['discount_1']:.0f}%)" if top_p.get('discount_1') else ""
+            info_parts.append(f"Listino Acquisto: {top_p['partner_name']} € {top_p['net_price']:.2f}{disc_str}")
+        if s_lists:
+            top_s = s_lists[0]
+            info_parts.append(f"Listino Vendita: € {top_s['net_price']:.2f} ({top_s['partner_name']})")
+
+        if info_parts:
+            self.lbl_art_price_lists.setText(" | ".join(info_parts))
+        else:
+            self.lbl_art_price_lists.setText("Listini B-Kode: Nessun listino associato a questo codice")
+
 
     def _perform_fallback_invoice_search(self, text, supplier_filter, search_code, search_desc):
         norm_text = re.sub(r'\b([a-zA-Z])\s+(\d+)\b', r'\1\2', text, flags=re.IGNORECASE)
