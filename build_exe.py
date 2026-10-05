@@ -8,6 +8,13 @@ SERVER_RELEASE_PATH = r"\\angeleri_new\Pubblica\Database\Antigravity\dist\versio
 SERVER_MAIN_APP_PATH = r"\\angeleri_new\Pubblica\Database\GestionaleAngeleri"
 
 def build(one_file=False):
+    try:
+        import PyQt6
+    except ImportError:
+        print("\n[ERRORE CRITICO] PyQt6 non e' installato nell'ambiente Python corrente!")
+        print("Usa l'ambiente virtuale del progetto: .\\venv\\Scripts\\python.exe build_exe.py\n")
+        return
+
     version = datetime.now().strftime("%Y%m%d_%H%M")
     mode_str = "FILE UNICO" if one_file else "CARTELLA (ONEDIR)"
     print(f"=== INIZIO COMPILAZIONE GESTIONALE ANGELERI v{version} ({mode_str}) ===")
@@ -30,6 +37,11 @@ def build(one_file=False):
         '--noconfirm',
         '--distpath=dist/temp_build',
         '--add-data=app;app',
+        '--hidden-import=PyQt6',
+        '--hidden-import=PyQt6.QtCore',
+        '--hidden-import=PyQt6.QtGui',
+        '--hidden-import=PyQt6.QtWidgets',
+        '--collect-all=PyQt6',
         '--hidden-import=psycopg2',
         '--hidden-import=psycopg2._psycopg',
         '--hidden-import=sqlalchemy.dialects.postgresql',

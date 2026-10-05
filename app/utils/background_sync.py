@@ -5,6 +5,7 @@ di un singolo nodo Master ed evitare chiamate duplicate o conflitti di scrittura
 postazioni dell'officina.
 """
 
+import os
 import socket
 import logging
 from datetime import datetime, timedelta
@@ -411,27 +412,69 @@ class BKodeSyncEngine:
                 except Exception:
                     continue
 
-                supp_name = (pinv.get("fxml_ragsoc_1") or pinv.get("for_ragsoc_1") or pinv.get("xml_ced_ragsoc") or "").strip()
-                if supp_name:
-                    supp = session.query(Supplier).filter(Supplier.name.ilike(supp_name)).first()
+                supp_raw = (pinv.get("fxml_ragsoc_1") or pinv.get("for_ragsoc_1") or pinv.get("xml_ced_ragsoc") or "").strip()
+                if supp_raw:
+                    from app.controllers.invoice_manager import InvoiceManager
+                    canonical_name = InvoiceManager._normalize_supplier(supp_raw)
+                    supp = session.query(Supplier).filter(Supplier.name.ilike(canonical_name)).first()
                     if not supp:
-                        supp = Supplier(name=supp_name)
+                        supp = session.query(Supplier).filter(Supplier.name.ilike(supp_raw)).first()
+                    if not supp:
+                        supp = Supplier(name=canonical_name)
                         session.add(supp)
                         session.flush()
 
                     exists_p = session.query(Invoice).filter_by(supplier_id=supp.id, number=num, date=dt).first()
-                    if not exists_p:
-                        tot = float(pinv.get("fxml_tot") or pinv.get("fxml_imp") or pinv.get("xml_tot_doc") or 0.0)
+                    items_cnt = session.query(InvoiceItem).filter_by(invoice_id=exists_p.id).count() if exists_p else 0
+
+                    if not exists_p or items_cnt == 0:
                         file_name = pinv.get("fxml_file") or pinv.get("fxml_file_sdi") or ""
-                        new_p = Invoice(
-                            supplier_id=supp.id,
-                            number=num,
-                            date=dt,
-                            total_amount=tot,
-                            file_path=file_name
-                        )
-                        session.add(new_p)
-                        invoices_count += 1
+                        fxml_id = pinv.get("fxml_id")
+                        xml_saved_path = None
+
+                        if fxml_id and file_name:
+                            base_dir = r"\\angeleri_new\Pubblica\Database\Fornitori"
+                            safe_name = supp.name.replace("SRL", "").replace("S.P.A.", "").replace("S.R.L.", "").replace("SPA", "").strip()
+                            cand_dirs = [d for d in os.listdir(base_dir) if safe_name.lower() in d.lower()] if os.path.exists(base_dir) else []
+                            target_dir = os.path.join(base_dir, cand_dirs[0]) if cand_dirs else (os.path.join(base_dir, safe_name) if os.path.exists(base_dir) else os.path.join(os.getcwd(), "data", "Fornitori", safe_name))
+                            try:
+                                os.makedirs(target_dir, exist_ok=True)
+                            except Exception:
+                                pass
+
+                            target_file = file_name if file_name.lower().endswith(".xml") else file_name + ".xml"
+                            xml_full_path = os.path.join(target_dir, target_file)
+
+                            if not os.path.exists(xml_full_path):
+                                try:
+                                    xml_bytes = self.client.download_purchase_invoice_xml(int(fxml_id), file_name)
+                                    if xml_bytes:
+                                        with open(xml_full_path, "wb") as f:
+                                            f.write(xml_bytes)
+                                        xml_saved_path = xml_full_path
+                                except Exception as err:
+                                    logger.warning(f"[Sync] Errore download/salvataggio XML {xml_full_path}: {err}")
+                            else:
+                                xml_saved_path = xml_full_path
+
+                        if xml_saved_path and os.path.exists(xml_saved_path):
+                            try:
+                                inv_mgr = InvoiceManager()
+                                inv_mgr.import_invoice(xml_saved_path)
+                                invoices_count += 1
+                            except Exception as err:
+                                logger.error(f"[Sync] Errore parsing XML {xml_saved_path}: {err}")
+                        elif not exists_p:
+                            tot = float(pinv.get("fxml_tot") or pinv.get("fxml_imp") or pinv.get("xml_tot_doc") or 0.0)
+                            new_p = Invoice(
+                                supplier_id=supp.id,
+                                number=num,
+                                date=dt,
+                                total_amount=tot,
+                                file_path=file_name
+                            )
+                            session.add(new_p)
+                            invoices_count += 1
 
             session.commit()
             status_rec.status = "SUCCESS"

@@ -63,10 +63,12 @@ def main():
             except Exception:
                 continue
 
-            supp_name = (pinv.get("fxml_ragsoc_1") or pinv.get("for_ragsoc_1") or pinv.get("xml_ced_ragsoc") or "").strip()
-            if not supp_name:
+            supp_raw = (pinv.get("fxml_ragsoc_1") or pinv.get("for_ragsoc_1") or pinv.get("xml_ced_ragsoc") or "").strip()
+            if not supp_raw:
                 continue
 
+            from app.controllers.invoice_manager import InvoiceManager
+            supp_name = InvoiceManager._normalize_supplier(supp_raw)
             supp_key = supp_name.upper()
             supp = suppliers_cache.get(supp_key)
             if not supp:

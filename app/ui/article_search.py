@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, 
                              QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, 
                              QLabel, QCheckBox, QComboBox, QTabWidget, QGroupBox, QGridLayout,
-                             QInputDialog, QMessageBox)
+                             QInputDialog, QMessageBox, QSplitter)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
 import re
@@ -140,14 +140,13 @@ class ArticleSearchWidget(QWidget):
         self.table_matching_products.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table_matching_products.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table_matching_products.setSortingEnabled(True)
-        self.table_matching_products.setMaximumHeight(180)
+        self.table_matching_products.setMinimumHeight(140)
         self.table_matching_products.setToolTip("Fai clic su un articolo per visualizzarne la Scheda 360°, lo storico vendite e gli acquisti")
         self.table_matching_products.itemSelectionChanged.connect(self._on_matching_product_selected)
         self.table_matching_products.cellClicked.connect(lambda r, c: self._on_matching_product_selected())
         box_prod_layout.addWidget(self.table_matching_products)
 
         self.box_matching_products.setVisible(False)
-        layout.addWidget(self.box_matching_products)
 
         # Scheda Riepilogo 360° Articolo (Box espandibile)
         self.box_360 = QGroupBox("Scheda Master Articolo & Equivalenze (360°)")
@@ -195,7 +194,6 @@ class ArticleSearchWidget(QWidget):
         self.box_360_layout.addWidget(self.lbl_art_bkode, 5, 0, 1, 4)
         
         self.box_360.setVisible(False) # Visibile solo quando c'è un riscontro
-        layout.addWidget(self.box_360)
 
         # Tabs Risultati: Acquisti Fornitori vs Vendite Clienti vs Distinta Base / Produzione
         self.tabs = QTabWidget()
@@ -340,7 +338,42 @@ class ArticleSearchWidget(QWidget):
         
         self.tabs.addTab(self.tab_pricelists, "Listini Ufficiali (Acquisto / Vendita)")
 
-        layout.addWidget(self.tabs)
+        # Splitter Verticale Regolabile: consente all'utente di ridimensionare a piacere
+        # l'altezza della lista articoli trovati rispetto ai dettagli/storico in basso
+        self.main_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setStyleSheet("""
+            QSplitter::handle:vertical {
+                background-color: #B0BEC5;
+                height: 7px;
+                margin: 2px 0px;
+                border-radius: 3px;
+            }
+            QSplitter::handle:vertical:hover {
+                background-color: #1976D2;
+            }
+        """)
+        self.main_splitter.setToolTip("Trascina questo separatore per regolare l'altezza dell'elenco risultati")
+
+        # Pannello superiore: Elenco Articoli Trovati
+        self.main_splitter.addWidget(self.box_matching_products)
+
+        # Pannello inferiore: Contenitore per Scheda 360 e Tab Storico
+        self.bottom_container = QWidget()
+        bottom_layout = QVBoxLayout(self.bottom_container)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(6)
+        bottom_layout.addWidget(self.box_360)
+        bottom_layout.addWidget(self.tabs)
+
+        self.main_splitter.addWidget(self.bottom_container)
+
+        # Dimensioni iniziali generose: 300px per la lista articoli, 500px per lo storico
+        self.main_splitter.setStretchFactor(0, 2)
+        self.main_splitter.setStretchFactor(1, 3)
+        self.main_splitter.setSizes([300, 500])
+
+        layout.addWidget(self.main_splitter)
         
         # Status Bar interna
         self.status_label = QLabel("Pronto per la ricerca.")
@@ -485,11 +518,23 @@ class ArticleSearchWidget(QWidget):
         self.input_filter_matching.setVisible(True)
         self.btn_toggle_matching.setText("Comprimi ▲")
 
+        # Assicura un'altezza iniziale generosa per la finestra dei risultati nel separatore
+        sizes = self.main_splitter.sizes()
+        if sizes and sizes[0] < 280:
+            total_h = sum(sizes) if sum(sizes) > 0 else 800
+            target_top = min(340, max(280, int(total_h * 0.4)))
+            self.main_splitter.setSizes([target_top, max(300, total_h - target_top)])
+
     def _toggle_matching_products(self):
         is_vis = self.table_matching_products.isVisible()
         self.table_matching_products.setVisible(not is_vis)
         self.input_filter_matching.setVisible(not is_vis)
         self.btn_toggle_matching.setText("Espandi Lista ▼" if is_vis else "Comprimi ▲")
+        if not is_vis:
+            sizes = self.main_splitter.sizes()
+            total_h = sum(sizes) if sum(sizes) > 0 else 800
+            target_top = min(340, max(280, int(total_h * 0.4)))
+            self.main_splitter.setSizes([target_top, max(300, total_h - target_top)])
 
     def _filter_matching_products_table(self):
         text = self.input_filter_matching.text().strip().lower()

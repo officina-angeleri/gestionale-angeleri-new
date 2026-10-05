@@ -187,6 +187,19 @@ class BKodeClient:
         data = self._post_grid("fatforxmlList", {"start": str(start), "limit": str(limit)})
         return data.get("items", []) if data else []
 
+    def download_purchase_invoice_xml(self, fxml_id: int, file_name: str) -> Optional[bytes]:
+        """Scarica il file XML originale della fattura elettronica SDI da B-Kode Cloud."""
+        b64_file = base64.b64encode(file_name.encode('utf-8')).decode('utf-8')
+        url = f"{self.BASE_URL}/panel/attachment/angeleri/show/fatforxmlList/fxml_file/{fxml_id}/grid/{b64_file}"
+        try:
+            r = self.session.get(url, timeout=30)
+            if r.status_code == 200 and len(r.content) > 100:
+                return r.content
+            logger.warning(f"[B-Kode] Download XML fxml_id={fxml_id} fallito (Status: {r.status_code}, len={len(r.content)})")
+        except Exception as e:
+            logger.error(f"[B-Kode] Errore di rete download XML fxml_id={fxml_id}: {e}")
+        return None
+
     # ==========================================
     # METODI DI ESTRAZIONE ARTICOLI CATALOGO
     # ==========================================

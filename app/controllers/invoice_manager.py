@@ -117,19 +117,26 @@ class InvoiceManager:
             ).first()
 
             if existing:
-                 print(f"Skipping existing invoice {parsed_data.number}")
-                 continue
-
-            # Create Invoice
-            invoice = Invoice(
-                supplier_id=supplier.id,
-                date=parsed_data.date,
-                number=parsed_data.number,
-                total_amount=parsed_data.total_amount,
-                file_path=parsed_data.original_file_path
-            )
-            self.session.add(invoice)
-            self.session.flush()
+                item_count = self.session.query(InvoiceItem).filter_by(invoice_id=existing.id).count()
+                if item_count > 0:
+                    print(f"Skipping existing invoice {parsed_data.number} (already has {item_count} items)")
+                    continue
+                else:
+                    print(f"Existing invoice {parsed_data.number} found with 0 items. Populating items...")
+                    invoice = existing
+                    if parsed_data.original_file_path:
+                        invoice.file_path = parsed_data.original_file_path
+            else:
+                # Create Invoice
+                invoice = Invoice(
+                    supplier_id=supplier.id,
+                    date=parsed_data.date,
+                    number=parsed_data.number,
+                    total_amount=parsed_data.total_amount,
+                    file_path=parsed_data.original_file_path
+                )
+                self.session.add(invoice)
+                self.session.flush()
 
             # Create Items
             for item in parsed_data.items:
