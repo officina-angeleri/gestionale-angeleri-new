@@ -1,4 +1,6 @@
 import os
+import json
+import logging
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView,
@@ -13,25 +15,48 @@ from app.database import (
     SalesInvoice, SalesInvoiceItem, Customer
 )
 
+logger = logging.getLogger(__name__)
+
 
 def resolve_invoice_file_path(file_path: str) -> str | None:
-    """Risolve il percorso assoluto del file sorgente della fattura sul file system."""
+    """Risolve il percorso assoluto del file sorgente della fattura sul file system o sul NAS."""
     if not file_path:
         return None
     clean = file_path.strip().replace('/', '\\')
     if os.path.isabs(clean) and os.path.exists(clean):
         return clean
 
+    base_nas_fornitori = r"\\angeleri_new\Pubblica\Database\Fornitori"
+    base_nas_clienti = r"\\angeleri_new\Pubblica\Database\File_per_progetto\Fatture_Clienti"
+    fname = os.path.basename(clean)
+
     candidates = [
         clean,
+        os.path.join(base_nas_fornitori, clean),
+        os.path.join(base_nas_fornitori, fname),
+        os.path.join(base_nas_clienti, fname),
+        os.path.join(r"\\angeleri_new\Pubblica\Database\File_per_progetto", fname),
         os.path.join(os.getcwd(), clean),
-        os.path.join(os.getcwd(), "File_per_progetto", "Fatture_Clienti", os.path.basename(clean)),
-        os.path.join(os.getcwd(), "File_per_progetto", os.path.basename(clean)),
+        os.path.join(os.getcwd(), "File_per_progetto", "Fatture_Clienti", fname),
+        os.path.join(os.getcwd(), "File_per_progetto", fname),
         os.path.join(os.getcwd(), "Fornitori", clean),
+        os.path.join(os.getcwd(), "data", "Fornitori", clean),
     ]
     for c in candidates:
         if os.path.exists(c):
             return os.path.abspath(c)
+
+    # Ricerca rapida nelle sottocartelle fornitori sul NAS se è un file XML o PDF
+    if os.path.exists(base_nas_fornitori) and fname.lower().endswith(('.xml', '.pdf', '.p7m')):
+        try:
+            for entry in os.scandir(base_nas_fornitori):
+                if entry.is_dir():
+                    sub_cand = os.path.join(entry.path, fname)
+                    if os.path.exists(sub_cand):
+                        return os.path.abspath(sub_cand)
+        except Exception:
+            pass
+
     return None
 
 
@@ -311,6 +336,12 @@ class InvoiceDetailDialog(QWidget):
             if inv_sale:
                 self._populate_sales_invoice(inv_sale)
             elif inv_purchase:
+                if len(inv_purchase.items) == 0:
+                    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+                    try:
+                        inv_purchase = self._auto_recover_purchase_items(session, inv_purchase)
+                    finally:
+                        QApplication.restoreOverrideCursor()
                 self._populate_purchase_invoice(inv_purchase)
             else:
                 self.setWindowTitle("Fattura Non Trovata")
@@ -408,6 +439,147 @@ class InvoiceDetailDialog(QWidget):
         file_status = f"Disponibile ({os.path.basename(self.resolved_file_path)})" if self.resolved_file_path else (self.file_path or "N/D")
         self.lbl_count.setText(f"{len(inv.items)} righe articolo  •  File sorgente: {file_status}")
         self.btn_open_file.setEnabled(bool(self.resolved_file_path))
+
+    def _auto_recover_purchase_items(self, session, inv: Invoice) -> Invoice:
+        """
+        Recupera on-demand gli articoli della fattura se assenti a DB.
+        1. Se esiste già un'altra fattura nel DB associata allo stesso file XML
+           o allo stesso numero/data che ha gli articoli (es. generata con nome fornitore canonico
+           anziché '[CODIFICARE] Nome'), aggancia quella ed elimina il duplicato vuoto.
+        2. Altrimenti verifica se l'XML è già presente sul NAS; se non trovato,
+           interroga B-Kode Cloud, scarica l'XML originale, lo archivia sul NAS
+           e popola le righe articolo tramite InvoiceManager.
+        """
+        fname = os.path.basename(inv.file_path) if inv.file_path else ""
+
+        # Controllo 1: Esiste già un'altra fattura popolata con lo stesso file o numero/data?
+        other = None
+        if fname:
+            other = session.query(Invoice).filter(
+                Invoice.id != inv.id,
+                Invoice.file_path.ilike(f"%{fname}%"),
+                Invoice.items.any()
+            ).first()
+        if not other and inv.number and inv.date:
+            other = session.query(Invoice).filter(
+                Invoice.id != inv.id,
+                Invoice.number == str(inv.number).strip(),
+                Invoice.date == inv.date,
+                Invoice.items.any()
+            ).first()
+
+        if other and len(other.items) > 0:
+            logger.info(f"[InvoiceDetail] Trovata fattura gemella ID={other.id} con {len(other.items)} articoli. Rimuovo duplicato vuoto ID={inv.id}.")
+            try:
+                session.delete(inv)
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.warning(f"[InvoiceDetail] Impossibile eliminare duplicato vuoto ID={inv.id}: {e}")
+            return other
+
+        xml_target_path = resolve_invoice_file_path(inv.file_path)
+
+        # Se non è su disco, tentiamo il download trasparente da B-Kode Cloud
+        if not xml_target_path or not os.path.exists(xml_target_path):
+            try:
+                from app.utils.bkode_client import BKodeClient
+                client = BKodeClient()
+                if client.ensure_authenticated():
+                    file_name = fname
+                    bkode_item = None
+
+                    # Ricerca su B-Kode per nome file se disponibile
+                    if file_name and file_name.lower().endswith(('.xml', '.p7m')):
+                        res = client._post_grid('fatforxmlList', {
+                            'filter': json.dumps([{'field': 'fxml_file', 'data': {'type': 'string', 'value': file_name}}]),
+                            'start': '0', 'limit': '5'
+                        })
+                        items = res.get('items', []) if res else []
+                        if items:
+                            bkode_item = items[0]
+
+                    # Ricerca su B-Kode per numero fattura se non trovato per file
+                    if not bkode_item and inv.number:
+                        res = client._post_grid('fatforxmlList', {
+                            'filter': json.dumps([{'field': 'fxml_nr_fat', 'data': {'type': 'string', 'value': str(inv.number)}}]),
+                            'start': '0', 'limit': '15'
+                        })
+                        items = res.get('items', []) if res else []
+                        for it in items:
+                            dt_str = it.get('fxml_dt_fat') or ''
+                            if inv.date and dt_str.startswith(str(inv.date)[:4]):
+                                bkode_item = it
+                                break
+                        if not bkode_item and items:
+                            bkode_item = items[0]
+
+                    if bkode_item:
+                        fid = bkode_item.get('fxml_id')
+                        fn = bkode_item.get('fxml_file') or file_name or f"fattura_{inv.number}.xml"
+                        xml_bytes = client.download_purchase_invoice_xml(fid, fn)
+                        if xml_bytes:
+                            supp_name = inv.supplier.name if inv.supplier else "Altri_Fornitori"
+                            from app.controllers.invoice_manager import InvoiceManager
+                            safe_name = InvoiceManager._normalize_supplier(supp_name)
+                            safe_name = safe_name.replace("SRL", "").replace("S.P.A.", "").replace("S.R.L.", "").replace("SPA", "").strip() or "Varie"
+
+                            base_nas = r"\\angeleri_new\Pubblica\Database\Fornitori"
+                            target_dir = os.path.join(base_nas, safe_name) if os.path.exists(base_nas) else os.path.join(os.getcwd(), "data", "Fornitori", safe_name)
+                            try:
+                                os.makedirs(target_dir, exist_ok=True)
+                            except Exception:
+                                pass
+                            dest_path = os.path.join(target_dir, fn)
+                            with open(dest_path, "wb") as f:
+                                f.write(xml_bytes)
+                            xml_target_path = dest_path
+            except Exception as e:
+                logger.warning(f"[InvoiceDetail] Errore durante il recupero automatico da B-Kode: {e}")
+
+        # Se abbiamo il file XML (trovato o appena scaricato), effettuiamo l'importazione
+        if xml_target_path and os.path.exists(xml_target_path):
+            try:
+                from app.controllers.invoice_manager import InvoiceManager
+                mgr = InvoiceManager()
+                try:
+                    mgr.import_invoice(xml_target_path)
+                finally:
+                    try:
+                        mgr.session.close()
+                    except Exception:
+                        pass
+
+                # Aggiorna il percorso file nella fattura corrente
+                inv.file_path = xml_target_path
+                session.commit()
+                session.expire(inv)
+
+                # Se dopo l'importazione inv ha articoli, perfetto!
+                if len(inv.items) > 0:
+                    logger.info(f"[InvoiceDetail] Auto-recupero completato per fattura ID={inv.id} n. {inv.number} ({len(inv.items)} articoli)")
+                    return inv
+
+                # Se inv ha ancora 0 articoli, verifica se l'importazione ha creato/aggiornato una fattura con nome canonico
+                if fname:
+                    other = session.query(Invoice).filter(
+                        Invoice.id != inv.id,
+                        Invoice.file_path.ilike(f"%{fname}%"),
+                        Invoice.items.any()
+                    ).first()
+                    if other and len(other.items) > 0:
+                        logger.info(f"[InvoiceDetail] Dopo import, trovata fattura canonica ID={other.id} con {len(other.items)} articoli. Rimuovo duplicato vuoto ID={inv.id}.")
+                        try:
+                            session.delete(inv)
+                            session.commit()
+                        except Exception:
+                            session.rollback()
+                        return other
+
+            except Exception as e:
+                logger.error(f"[InvoiceDetail] Errore durante l'importazione automatica delle righe: {e}")
+
+        return inv
 
     def _populate_purchase_invoice(self, inv: Invoice):
         self.file_path = inv.file_path

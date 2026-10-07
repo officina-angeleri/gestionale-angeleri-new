@@ -54,10 +54,11 @@ class InvoiceManager:
 
     @staticmethod
     def _normalize_supplier(name: str) -> str:
-        """Pulisce spazi multipli e risolve varianti di denominazione al nome canonico."""
+        """Pulisce spazi multipli, prefissi come [CODIFICARE] e risolve varianti di denominazione al nome canonico."""
         if not name:
             return "Sconosciuto"
-        cleaned = " ".join(name.split())
+        cleaned = re.sub(r'^\s*\[(CODIFICARE|NON CODIFICATO)\]\s*', '', name, flags=re.IGNORECASE)
+        cleaned = " ".join(cleaned.split())
         return SUPPLIER_ALIASES.get(cleaned, cleaned)
 
     def _get_parser(self, file_path: str) -> InvoiceParser:
