@@ -256,7 +256,6 @@ class MainWindow(QMainWindow):
 
     def switch_view(self, index):
         self.central_stack.setCurrentIndex(index)
-        self.refresh_current_view()
 
     def show_import_dialog(self):
         dlg = ImportDialog(self.controller, self)

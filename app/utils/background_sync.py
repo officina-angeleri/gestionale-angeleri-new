@@ -68,7 +68,13 @@ class BKodeSyncEngine:
 
         # 1. Tenta acquisizione lock distribuito su PostgreSQL
         if not try_acquire_sync_lock(session):
-            summary["reason"] = "Un'altra postazione in officina sta già eseguendo la sincronizzazione B-Kode."
+            running_task = session.query(SyncStatus).filter(SyncStatus.status == "RUNNING").first()
+            if running_task and running_task.executed_by_host == self.hostname:
+                summary["reason"] = "La sincronizzazione automatica B-Kode è già in corso in background su questo computer."
+            elif running_task and running_task.executed_by_host:
+                summary["reason"] = f"La sincronizzazione B-Kode è attualmente in corso dalla postazione '{running_task.executed_by_host}'."
+            else:
+                summary["reason"] = "Un'altra postazione in officina sta già eseguendo la sincronizzazione B-Kode."
             logger.info(f"[Sync] {summary['reason']}")
             session.close()
             return summary
@@ -108,6 +114,11 @@ class BKodeSyncEngine:
             # 5. Sincronizzazione Nuove Fatture (Vendite e Acquisti)
             inv_res = self.sync_recent_invoices(session)
             summary["invoices_synced"] = inv_res.get("invoices_count", 0)
+
+            # 6. Sincronizzazione Scheda Articoli Fornitori (mgafoList)
+            supp_art_res = self.sync_supplier_articles(session)
+            summary["supplier_articles_synced"] = supp_art_res.get("new_supplier_products", 0)
+            summary["invoice_items_linked"] = supp_art_res.get("linked_invoice_items", 0)
 
             logger.info(f"[Sync] Sincronizzazione completata da {self.hostname}: {summary}")
 
@@ -175,6 +186,11 @@ class BKodeSyncEngine:
 
             # Mappa ID listino bkode -> id DB
             bkode_to_db_id = {pl.bkode_id: pl.id for pl in session.query(PriceList).all()}
+            db_products = {p.code.strip().upper(): p for p in session.query(Product).all()}
+            existing_price_items = {
+                (pi.price_list_id, pi.product_code.strip().upper()): pi
+                for pi in session.query(PriceListItem).all()
+            }
 
             # Inserimento / Aggiornamento righe articoli acquisto
             for it in p_items:
@@ -187,13 +203,13 @@ class BKodeSyncEngine:
                 if not db_pl_id:
                     continue
 
-                db_item = session.query(PriceListItem).filter_by(
-                    price_list_id=db_pl_id, product_code=art_code
-                ).first()
+                key = (db_pl_id, art_code.upper())
+                db_item = existing_price_items.get(key)
 
                 if not db_item:
                     db_item = PriceListItem(price_list_id=db_pl_id, product_code=art_code)
                     session.add(db_item)
+                    existing_price_items[key] = db_item
 
                 db_item.description = it.get("_combo_lid_art") or it.get("art_des") or ""
                 db_item.drawing_number = it.get("art_n_d") or ""
@@ -212,7 +228,7 @@ class BKodeSyncEngine:
                 db_item.net_price = net
 
                 # Collega a Product se presente
-                prod = session.query(Product).filter(Product.code.ilike(art_code)).first()
+                prod = db_products.get(art_code.upper())
                 if prod:
                     db_item.product_id = prod.id
 
@@ -254,13 +270,13 @@ class BKodeSyncEngine:
                 if not db_sl_id:
                     continue
 
-                db_item = session.query(PriceListItem).filter_by(
-                    price_list_id=db_sl_id, product_code=art_code
-                ).first()
+                key = (db_sl_id, art_code.upper())
+                db_item = existing_price_items.get(key)
 
                 if not db_item:
                     db_item = PriceListItem(price_list_id=db_sl_id, product_code=art_code)
                     session.add(db_item)
+                    existing_price_items[key] = db_item
 
                 prz = float(it.get("vld_prz_1") or it.get("lir_prz_1") or 0.0)
                 sc1 = float(it.get("vld_sc_1_1") or it.get("lir_sc_1_1") or 0.0)
@@ -275,7 +291,7 @@ class BKodeSyncEngine:
                 db_item.discount_3 = sc3
                 db_item.net_price = net
 
-                prod = session.query(Product).filter(Product.code.ilike(art_code)).first()
+                prod = db_products.get(art_code.upper())
                 if prod:
                     db_item.product_id = prod.id
                     # Se il prodotto non ha listino vendita valorizzato, aggiornalo con il listino ufficiale
@@ -302,9 +318,10 @@ class BKodeSyncEngine:
         return {"lists_count": lists_count, "items_count": items_count}
 
     def sync_new_products(self, session) -> Dict[str, Any]:
-        """Controlla se ci sono nuovi articoli inseriti in B-Kode non presenti nel database locale."""
-        logger.info("[Sync] Controllo nuovi articoli a catalogo da B-Kode...")
+        """Sincronizza gli articoli a catalogo da B-Kode: inserisce i nuovi e aggiorna i costi standard (art_costo_std)."""
+        logger.info("[Sync] Sincronizzazione catalogo articoli e costi standard da B-Kode...")
         new_count = 0
+        updated_count = 0
         status_rec = session.query(SyncStatus).filter_by(task_name="PRODUCTS").first()
         if not status_rec:
             status_rec = SyncStatus(task_name="PRODUCTS")
@@ -314,33 +331,62 @@ class BKodeSyncEngine:
         session.commit()
 
         try:
-            # Legge gli ultimi 100 articoli inseriti/modificati su B-Kode
-            items = self.client.fetch_products(start=0, limit=100)
-            for it in items:
-                code = (it.get("art_code") or "").strip()
-                if not code:
-                    continue
-                existing = session.query(Product).filter(Product.code.ilike(code)).first()
-                if not existing:
-                    prod = Product(
-                        code=code,
-                        name=it.get("art_des") or code,
-                        type=it.get("art_tipo") or "ALTRO",
-                        category=it.get("art_classe") or "Standard",
-                        unit_measure=it.get("art_um") or "NR",
-                        bkode_id=int(it.get("art_id") or 0) if it.get("art_id") else None,
-                        drawing_number=it.get("art_n_d") or "",
-                        conversion_factor=float(it.get("art_cnv_a") or 1.0) if it.get("art_cnv_a") else 1.0,
-                        purchase_um=it.get("art_um_a") or ""
-                    )
-                    session.add(prod)
-                    new_count += 1
+            # Dizionario per lookup O(1) in memoria
+            db_products = {p.code.strip().upper(): p for p in session.query(Product).all()}
+
+            start = 0
+            limit = 1000
+            while True:
+                items = self.client.fetch_products(start=start, limit=limit)
+                if not items:
+                    break
+
+                for it in items:
+                    code = (it.get("art_code") or "").strip()
+                    if not code:
+                        continue
+                    code_key = code.upper()
+                    costo_std = float(it.get("art_costo_std") or 0.0)
+
+                    existing = db_products.get(code_key)
+                    if not existing:
+                        prod = Product(
+                            code=code,
+                            name=it.get("art_des") or code,
+                            type=it.get("art_tipo") or "ALTRO",
+                            category=it.get("art_classe") or "Standard",
+                            unit_measure=it.get("art_um") or "NR",
+                            bkode_id=int(it.get("art_id") or 0) if it.get("art_id") else None,
+                            drawing_number=it.get("art_n_d") or "",
+                            conversion_factor=float(it.get("art_cnv_a") or 1.0) if it.get("art_cnv_a") else 1.0,
+                            purchase_um=it.get("art_um_a") or "",
+                            production_cost=costo_std
+                        )
+                        session.add(prod)
+                        db_products[code_key] = prod
+                        new_count += 1
+                    else:
+                        # Aggiorna il costo standard se modificato su B-Kode
+                        changed = False
+                        if costo_std > 0 and (existing.production_cost is None or abs(float(existing.production_cost) - costo_std) > 0.001):
+                            existing.production_cost = costo_std
+                            changed = True
+                        if not existing.drawing_number and it.get("art_n_d"):
+                            existing.drawing_number = it.get("art_n_d")
+                            changed = True
+                        if changed:
+                            updated_count += 1
+
+                start += limit
+                if len(items) < limit:
+                    break
 
             session.commit()
             status_rec.status = "SUCCESS"
             status_rec.last_sync_time = datetime.utcnow()
-            status_rec.items_synced = new_count
+            status_rec.items_synced = new_count + updated_count
             session.commit()
+            logger.info(f"[Sync] Catalogo B-Kode sincronizzato: {new_count} nuovi, {updated_count} costi/dettagli aggiornati.")
         except Exception as e:
             session.rollback()
             status_rec.status = "ERROR"
@@ -348,7 +394,46 @@ class BKodeSyncEngine:
             session.commit()
             logger.error(f"[Sync] Errore sincronizzazione articoli: {e}")
 
-        return {"new_products_count": new_count}
+        return {"new_products_count": new_count, "updated_count": updated_count}
+
+    def sync_single_product(self, session, code: str) -> Optional[Product]:
+        """Recupera un singolo articolo direttamente da B-Kode e ne aggiorna costo standard e dettagli a DB."""
+        if not code or not code.strip():
+            return None
+        clean_code = code.strip()
+        data = self.client.fetch_product_by_code(clean_code)
+        if not data:
+            return None
+
+        prod = session.query(Product).filter(Product.code.ilike(clean_code)).first()
+        costo_std = float(data.get("art_costo_std") or 0.0)
+
+        if not prod:
+            prod = Product(
+                code=clean_code,
+                name=data.get("art_des") or clean_code,
+                type=data.get("art_tipo") or "ALTRO",
+                category=data.get("art_classe") or "Standard",
+                unit_measure=data.get("art_um") or "NR",
+                bkode_id=int(data.get("art_id") or 0) if data.get("art_id") else None,
+                drawing_number=data.get("art_n_d") or "",
+                conversion_factor=float(data.get("art_cnv_a") or 1.0) if data.get("art_cnv_a") else 1.0,
+                purchase_um=data.get("art_um_a") or "",
+                production_cost=costo_std
+            )
+            session.add(prod)
+        else:
+            if costo_std > 0:
+                prod.production_cost = costo_std
+            if data.get("art_des"):
+                prod.name = data.get("art_des")
+            if data.get("art_n_d"):
+                prod.drawing_number = data.get("art_n_d")
+            if data.get("art_um"):
+                prod.unit_measure = data.get("art_um")
+
+        session.commit()
+        return prod
 
     def sync_recent_invoices(self, session) -> Dict[str, Any]:
         """Controlla se ci sono nuove fatture su B-Kode (Vendite fatcliList e Acquisti fatforxmlList)."""
@@ -422,7 +507,7 @@ class BKodeSyncEngine:
                     if not supp:
                         supp = Supplier(name=canonical_name)
                         session.add(supp)
-                        session.flush()
+                        session.commit()
 
                     exists_p = session.query(Invoice).filter_by(supplier_id=supp.id, number=num, date=dt).first()
                     items_cnt = session.query(InvoiceItem).filter_by(invoice_id=exists_p.id).count() if exists_p else 0
@@ -434,7 +519,7 @@ class BKodeSyncEngine:
 
                         if fxml_id and file_name:
                             base_dir = r"\\angeleri_new\Pubblica\Database\Fornitori"
-                            safe_name = supp.name.replace("SRL", "").replace("S.P.A.", "").replace("S.R.L.", "").replace("SPA", "").strip()
+                            safe_name = supp.name.replace("SRL", "").replace("S.P.A.", "").replace("S.R.L.", "").replace("SPA", "").strip(" .") or "Varie"
                             cand_dirs = [d for d in os.listdir(base_dir) if safe_name.lower() in d.lower()] if os.path.exists(base_dir) else []
                             target_dir = os.path.join(base_dir, cand_dirs[0]) if cand_dirs else (os.path.join(base_dir, safe_name) if os.path.exists(base_dir) else os.path.join(os.getcwd(), "data", "Fornitori", safe_name))
                             try:
@@ -459,7 +544,7 @@ class BKodeSyncEngine:
 
                         if xml_saved_path and os.path.exists(xml_saved_path):
                             try:
-                                inv_mgr = InvoiceManager()
+                                inv_mgr = InvoiceManager(session=session)
                                 inv_mgr.import_invoice(xml_saved_path)
                                 invoices_count += 1
                             except Exception as err:
@@ -489,6 +574,121 @@ class BKodeSyncEngine:
             logger.error(f"[Sync] Errore sincronizzazione fatture: {e}")
 
         return {"invoices_count": invoices_count}
+
+    def sync_supplier_articles(self, session) -> Dict[str, Any]:
+        """
+        Sincronizza le associazioni Codice Fornitore <-> Codice Interno Angeleri (mgafoList) da B-Kode.
+        Popola la tabella locale SupplierProduct e collega retroattivamente le righe fattura InvoiceItem.
+        """
+        from app.database import SupplierProduct, Supplier, Product, InvoiceItem
+        logger.info("[Sync] Sincronizzazione codici articoli fornitori da B-Kode (mgafoList)...")
+
+        status_rec = session.query(SyncStatus).filter_by(task_name="SUPPLIER_PRODUCTS").first()
+        if not status_rec:
+            status_rec = SyncStatus(task_name="SUPPLIER_PRODUCTS")
+            session.add(status_rec)
+
+        status_rec.status = "RUNNING"
+        status_rec.executed_by_host = self.hostname
+        session.commit()
+
+        new_count = 0
+        updated_invoices_count = 0
+
+        try:
+            # 1. Lookup in memoria per prestazioni O(1)
+            db_suppliers = {s.name.strip().upper(): s for s in session.query(Supplier).all()}
+            db_products = {p.code.strip().upper(): p for p in session.query(Product).all()}
+            existing_sps = {
+                (sp.supplier_id, sp.supplier_code.strip().upper()): sp 
+                for sp in session.query(SupplierProduct).all()
+            }
+
+            matched_sp_pairs = [] # (supp_code, prod_id) da aggiornare in batch
+
+            start = 0
+            limit = 500
+            while True:
+                data = self.client.fetch_bkode_supplier_articles(start=start, limit=limit)
+                if not data or not data.get("items"):
+                    break
+
+                items = data.get("items", [])
+                for it in items:
+                    supp_name = (it.get("for_ragsoc_1") or "").strip()
+                    supp_code = (it.get("afo_code") or "").strip()
+                    internal_code = (it.get("afo_ns_art") or "").strip()
+                    desc = (it.get("art_des1") or "").strip()
+
+                    if not supp_code or not internal_code:
+                        continue
+
+                    # Trova prodotto interno
+                    prod = db_products.get(internal_code.upper())
+                    if not prod:
+                        continue
+
+                    # Trova fornitore corrispondente (se presente)
+                    supp = None
+                    if supp_name:
+                        clean_supp_name = supp_name.strip("* ")
+                        supp = db_suppliers.get(clean_supp_name.upper())
+                        if not supp:
+                            for s_name, s_obj in db_suppliers.items():
+                                if clean_supp_name.upper() in s_name or s_name in clean_supp_name.upper():
+                                    supp = s_obj
+                                    break
+
+                    supp_id = supp.id if supp else None
+                    sp_key = (supp_id, supp_code.upper())
+                    sp = existing_sps.get(sp_key)
+
+                    if not sp:
+                        sp = SupplierProduct(
+                            supplier_id=supp_id,
+                            supplier_name=supp.name if supp else supp_name,
+                            supplier_code=supp_code,
+                            supplier_description=desc or prod.name,
+                            product_id=prod.id
+                        )
+                        session.add(sp)
+                        existing_sps[sp_key] = sp
+                        new_count += 1
+                        matched_sp_pairs.append((supp_code, prod.id))
+                    else:
+                        if sp.product_id != prod.id:
+                            sp.product_id = prod.id
+                            matched_sp_pairs.append((supp_code, prod.id))
+                        if desc and not sp.supplier_description:
+                            sp.supplier_description = desc
+
+                start += limit
+                if start >= int(data.get("totalCount", 0)):
+                    break
+
+            # 2. Aggiornamento retroattivo batch delle fatture con codice corrispondente senza product_id
+            if matched_sp_pairs:
+                for scode, pid in matched_sp_pairs:
+                    res = session.query(InvoiceItem).filter(
+                        InvoiceItem.code.ilike(scode),
+                        InvoiceItem.product_id.is_(None)
+                    ).update({InvoiceItem.product_id: pid}, synchronize_session=False)
+                    updated_invoices_count += res
+
+            session.commit()
+            status_rec.status = "SUCCESS"
+            status_rec.last_sync_time = datetime.utcnow()
+            status_rec.items_synced = new_count
+            session.commit()
+            logger.info(f"[Sync] Articoli fornitori sincronizzati: {new_count} nuovi, {updated_invoices_count} righe fattura collegate.")
+        except Exception as e:
+            session.rollback()
+            status_rec.status = "ERROR"
+            status_rec.last_error = str(e)
+            session.commit()
+            logger.error(f"[Sync] Errore sincronizzazione articoli fornitori: {e}")
+
+        return {"new_supplier_products": new_count, "linked_invoice_items": updated_invoices_count}
 
 
 class BackgroundSyncThread(QThread):

@@ -57,10 +57,15 @@ class ProductMatcher:
                 idx += 1
             final_code = candidate
 
+        # Garanzia limiti dimensionali colonne DB (code: VARCHAR(100), name: VARCHAR(255))
+        final_code = final_code[:100]
+        final_name = (product_name or "ARTICOLO")[:255]
+        clean_cust_code = customer_code[:100] if customer_code else None
+
         new_product = Product(
             code=final_code,
-            customer_code=customer_code,
-            name=product_name
+            customer_code=clean_cust_code,
+            name=final_name
         )
         self.session.add(new_product)
         self.session.flush() # Get ID

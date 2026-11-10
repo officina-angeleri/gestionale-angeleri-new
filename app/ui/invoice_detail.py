@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 from PyQt6.QtWidgets import (
@@ -9,6 +10,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QFont, QColor
 from PyQt6.QtCore import Qt
+from sqlalchemy import func, or_
 from app.utils.ui_utils import SortableTableWidgetItem
 from app.database import (
     get_db_session, Invoice, InvoiceItem, Supplier,
@@ -27,16 +29,17 @@ def resolve_invoice_file_path(file_path: str) -> str | None:
         return clean
 
     base_nas_fornitori = r"\\angeleri_new\Pubblica\Database\Fornitori"
-    base_nas_clienti = r"\\angeleri_new\Pubblica\Database\File_per_progetto\Fatture_Clienti"
+    base_nas_clienti = r"\\angeleri_new\Pubblica\Database\Fatture_Clienti"
     fname = os.path.basename(clean)
 
     candidates = [
         clean,
         os.path.join(base_nas_fornitori, clean),
         os.path.join(base_nas_fornitori, fname),
+        os.path.join(base_nas_clienti, clean),
         os.path.join(base_nas_clienti, fname),
-        os.path.join(r"\\angeleri_new\Pubblica\Database\File_per_progetto", fname),
         os.path.join(os.getcwd(), clean),
+        os.path.join(os.getcwd(), "data", "Fatture_Clienti", fname),
         os.path.join(os.getcwd(), "File_per_progetto", "Fatture_Clienti", fname),
         os.path.join(os.getcwd(), "File_per_progetto", fname),
         os.path.join(os.getcwd(), "Fornitori", clean),
@@ -46,16 +49,17 @@ def resolve_invoice_file_path(file_path: str) -> str | None:
         if os.path.exists(c):
             return os.path.abspath(c)
 
-    # Ricerca rapida nelle sottocartelle fornitori sul NAS se è un file XML o PDF
-    if os.path.exists(base_nas_fornitori) and fname.lower().endswith(('.xml', '.pdf', '.p7m')):
-        try:
-            for entry in os.scandir(base_nas_fornitori):
-                if entry.is_dir():
-                    sub_cand = os.path.join(entry.path, fname)
-                    if os.path.exists(sub_cand):
-                        return os.path.abspath(sub_cand)
-        except Exception:
-            pass
+    # Ricerca rapida nelle sottocartelle fornitori o clienti sul NAS
+    for base_dir in [base_nas_fornitori, base_nas_clienti]:
+        if os.path.exists(base_dir) and fname.lower().endswith(('.xml', '.pdf', '.p7m')):
+            try:
+                for entry in os.scandir(base_dir):
+                    if entry.is_dir():
+                        sub_cand = os.path.join(entry.path, fname)
+                        if os.path.exists(sub_cand):
+                            return os.path.abspath(sub_cand)
+            except Exception:
+                pass
 
     return None
 
@@ -316,24 +320,137 @@ class InvoiceDetailDialog(QWidget):
             inv_sale = None
             inv_purchase = None
 
-            # 1. Risoluzione Fattura Vendita (SalesInvoice)
-            if self.invoice_type in ("sale", "sales", "vendita", "auto"):
-                if self.invoice_id and self.invoice_type != "purchase":
-                    inv_sale = session.get(SalesInvoice, self.invoice_id)
-                elif self.invoice_number:
-                    q = session.query(SalesInvoice).filter(SalesInvoice.number == self.invoice_number)
-                    if self.invoice_year:
-                        q = q.filter(SalesInvoice.year == self.invoice_year)
-                    inv_sale = q.order_by(SalesInvoice.date.desc()).first()
+            def _pick_best(candidates):
+                if not candidates:
+                    return None
+                # Priorità assoluta a record con righe articolo
+                with_items = [c for c in candidates if len(c.items) > 0]
+                if with_items:
+                    return with_items[0]
+                return candidates[0]
 
-            # 2. Risoluzione Fattura Acquisto (Invoice)
-            if not inv_sale and self.invoice_type in ("purchase", "acquisto", "fornitore", "auto"):
-                if self.invoice_id:
-                    inv_purchase = session.get(Invoice, self.invoice_id)
-                elif self.invoice_number:
-                    inv_purchase = session.query(Invoice).filter(Invoice.number == self.invoice_number).order_by(Invoice.date.desc()).first()
+            def _find_sales(inv_id=None, inv_num=None, inv_yr=None):
+                if inv_id:
+                    cand = session.get(SalesInvoice, inv_id)
+                    if cand:
+                        return cand
+                if not inv_num:
+                    return None
+
+                clean_num = str(inv_num).strip()
+                no_spaces = "".join(clean_num.split()).lower()
+
+                # 1. Match esatto numero
+                q1 = session.query(SalesInvoice).filter(SalesInvoice.number == clean_num)
+                if inv_yr:
+                    q1 = q1.filter(SalesInvoice.year == inv_yr)
+                cands = q1.order_by(SalesInvoice.date.desc()).all()
+                best = _pick_best(cands)
+                if best:
+                    return best
+
+                # 2. Match senza spazi / case-insensitive
+                q2 = session.query(SalesInvoice).filter(
+                    func.replace(func.lower(SalesInvoice.number), ' ', '') == no_spaces
+                )
+                if inv_yr:
+                    q2 = q2.filter(SalesInvoice.year == inv_yr)
+                cands = q2.order_by(SalesInvoice.date.desc()).all()
+                best = _pick_best(cands)
+                if best:
+                    return best
+
+                # 3. Match con zfill / leading zeros (es. "217" vs "000217")
+                if clean_num.isdigit():
+                    num_int = int(clean_num)
+                    q3 = session.query(SalesInvoice).filter(
+                        or_(
+                            SalesInvoice.number == str(num_int),
+                            SalesInvoice.number.ilike(f"%{num_int}")
+                        )
+                    )
+                    if inv_yr:
+                        q3 = q3.filter(SalesInvoice.year == inv_yr)
+                    cands = q3.order_by(SalesInvoice.date.desc()).all()
+                    best = _pick_best(cands)
+                    if best:
+                        return best
+
+                return None
+
+            def _find_purchase(inv_id=None, inv_num=None, inv_yr=None):
+                if inv_id:
+                    cand = session.get(Invoice, inv_id)
+                    if cand:
+                        return cand
+                if not inv_num:
+                    return None
+
+                clean_num = str(inv_num).strip()
+                no_spaces = "".join(clean_num.split()).lower()
+
+                # 1. Match esatto numero
+                q1 = session.query(Invoice).filter(Invoice.number == clean_num)
+                if inv_yr:
+                    q1 = q1.filter(func.extract('year', Invoice.date) == inv_yr)
+                cands = q1.order_by(Invoice.date.desc()).all()
+                best = _pick_best(cands)
+                if best:
+                    return best
+
+                # 2. Match senza spazi (es. "V1 532/26" vs "V1  532/26" o "V1532/26")
+                q2 = session.query(Invoice).filter(
+                    func.replace(func.lower(Invoice.number), ' ', '') == no_spaces
+                )
+                if inv_yr:
+                    q2 = q2.filter(func.extract('year', Invoice.date) == inv_yr)
+                cands = q2.order_by(Invoice.date.desc()).all()
+                best = _pick_best(cands)
+                if best:
+                    return best
+
+                # 3. Match su token alfanumerici (es. "V1%532%26")
+                tokens = re.findall(r'[a-zA-Z0-9]+', clean_num)
+                if len(tokens) >= 2:
+                    pat = "%" + "%".join(tokens) + "%"
+                    q3 = session.query(Invoice).filter(Invoice.number.ilike(pat))
+                    if inv_yr:
+                        q3 = q3.filter(func.extract('year', Invoice.date) == inv_yr)
+                    cands = q3.order_by(Invoice.date.desc()).all()
+                    best = _pick_best(cands)
+                    if best:
+                        return best
+
+                # 4. Se la stringa è numerica, verifica se corrisponde all'ID fattura
+                if clean_num.isdigit():
+                    by_id = session.get(Invoice, int(clean_num))
+                    if by_id:
+                        return by_id
+
+                return None
+
+            # Risoluzione secondo il tipo richiesto o fallback automatico incrociato
+            pref_type = self.invoice_type
+            if pref_type in ("sale", "sales", "vendita"):
+                inv_sale = _find_sales(self.invoice_id, self.invoice_number, self.invoice_year)
+                if not inv_sale:
+                    inv_purchase = _find_purchase(self.invoice_id, self.invoice_number, self.invoice_year)
+            elif pref_type in ("purchase", "acquisto", "fornitore"):
+                inv_purchase = _find_purchase(self.invoice_id, self.invoice_number, self.invoice_year)
+                if not inv_purchase:
+                    inv_sale = _find_sales(self.invoice_id, self.invoice_number, self.invoice_year)
+            else: # "auto"
+                inv_sale = _find_sales(self.invoice_id, self.invoice_number, self.invoice_year)
+                if not inv_sale:
+                    inv_purchase = _find_purchase(self.invoice_id, self.invoice_number, self.invoice_year)
 
             if inv_sale:
+                if len(inv_sale.items) == 0:
+                    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+                    try:
+                        inv_sale = self._auto_recover_sales_items(session, inv_sale)
+                    finally:
+                        QApplication.restoreOverrideCursor()
                 self._populate_sales_invoice(inv_sale)
             elif inv_purchase:
                 if len(inv_purchase.items) == 0:
@@ -440,6 +557,90 @@ class InvoiceDetailDialog(QWidget):
         self.lbl_count.setText(f"{len(inv.items)} righe articolo  •  File sorgente: {file_status}")
         self.btn_open_file.setEnabled(bool(self.resolved_file_path))
 
+    def _auto_recover_sales_items(self, session, inv: SalesInvoice) -> SalesInvoice:
+        """
+        Recupera on-demand gli articoli di una fattura di vendita se assenti a DB.
+        Cerca prima l'XML sul NAS o su disco; se non trovato, interroga B-Kode Cloud
+        tramite fatclixmlList, scarica l'XML originale SDI, lo archivia sul NAS
+        e popola le righe articolo (SalesInvoiceItem).
+        """
+        xml_target_path = resolve_invoice_file_path(inv.file_path) if inv.file_path else None
+
+        # Se non è su disco, tentiamo il download trasparente da B-Kode Cloud fatclixmlList
+        if not xml_target_path or not os.path.exists(xml_target_path):
+            try:
+                from app.utils.bkode_client import BKodeClient
+                client = BKodeClient()
+                if client.ensure_authenticated():
+                    bkode_item = None
+                    if inv.number:
+                        res = client._post_grid('fatclixmlList', {
+                            'filter': json.dumps([{'field': 'fxml_nr_fat', 'data': {'type': 'string', 'value': str(inv.number)}}]),
+                            'start': '0', 'limit': '15'
+                        })
+                        items = res.get('items', []) if res else []
+                        for it in items:
+                            anno = str(it.get('fxml_anno') or '')
+                            dt_str = it.get('fxml_dt_fat') or ''
+                            if (inv.year and anno == str(inv.year)) or (inv.date and dt_str.startswith(str(inv.date)[:4])):
+                                bkode_item = it
+                                break
+                        if not bkode_item and items:
+                            bkode_item = items[0]
+
+                    if bkode_item:
+                        fid = bkode_item.get('fxml_id')
+                        fn = bkode_item.get('fxml_file') or f"IT01163890187_{inv.number}_{inv.year}.xml"
+                        xml_bytes = client.download_sales_invoice_xml(fid, fn)
+                        if xml_bytes:
+                            base_nas = r"\\angeleri_new\Pubblica\Database\Fatture_Clienti"
+                            year_folder = f"Fatture_{inv.year}" if inv.year else "Fatture_Recenti"
+                            target_dir = os.path.join(base_nas, year_folder) if os.path.exists(base_nas) else os.path.join(os.getcwd(), "data", "Fatture_Clienti", year_folder)
+                            try:
+                                os.makedirs(target_dir, exist_ok=True)
+                            except Exception:
+                                pass
+                            dest_path = os.path.join(target_dir, fn)
+                            with open(dest_path, "wb") as f:
+                                f.write(xml_bytes)
+                            xml_target_path = dest_path
+            except Exception as e:
+                logger.warning(f"[InvoiceDetail] Errore recupero automatico fattura vendita da B-Kode: {e}")
+
+        # Se abbiamo il file XML, effettuiamo l'estrazione delle righe articolo
+        if xml_target_path and os.path.exists(xml_target_path) and xml_target_path.lower().endswith(('.xml', '.p7m')):
+            try:
+                from app.parsers.xml_sdi import XMLSDIInvoiceParser
+                from app.controllers.product_matcher import ProductMatcher
+                parsed_list = XMLSDIInvoiceParser().parse(xml_target_path)
+                if parsed_list:
+                    parsed = parsed_list[0]
+                    matcher = ProductMatcher(session)
+                    for idx, it in enumerate(parsed.items):
+                        prod = matcher.get_or_create_product(it.code, it.description, it.customer_code)
+                        s_item = SalesInvoiceItem(
+                            invoice_id=inv.id,
+                            product_id=prod.id if prod else None,
+                            line_number=idx + 1,
+                            raw_code=it.code,
+                            description=it.description,
+                            unit_measure="NR",
+                            quantity=float(it.quantity or 1.0),
+                            unit_price=float(it.unit_price or 0.0),
+                            discount=0.0,
+                            total_price=float(it.total_price or 0.0)
+                        )
+                        session.add(s_item)
+
+                    inv.file_path = xml_target_path
+                    session.commit()
+                    session.expire(inv)
+                    logger.info(f"[InvoiceDetail] Auto-recupero righe vendita completato per fattura ID={inv.id} n. {inv.number}/{inv.year}")
+            except Exception as e:
+                logger.error(f"[InvoiceDetail] Errore parsing XML fattura vendita {xml_target_path}: {e}")
+
+        return inv
+
     def _auto_recover_purchase_items(self, session, inv: Invoice) -> Invoice:
         """
         Recupera on-demand gli articoli della fattura se assenti a DB.
@@ -450,7 +651,7 @@ class InvoiceDetailDialog(QWidget):
            interroga B-Kode Cloud, scarica l'XML originale, lo archivia sul NAS
            e popola le righe articolo tramite InvoiceManager.
         """
-        fname = os.path.basename(inv.file_path) if inv.file_path else ""
+        fname = os.path.basename(inv.file_path.replace('\\', '/')) if inv.file_path else ""
 
         # Controllo 1: Esiste già un'altra fattura popolata con lo stesso file o numero/data?
         other = None
@@ -461,12 +662,23 @@ class InvoiceDetailDialog(QWidget):
                 Invoice.items.any()
             ).first()
         if not other and inv.number and inv.date:
+            no_spaces = "".join(str(inv.number).split()).lower()
             other = session.query(Invoice).filter(
                 Invoice.id != inv.id,
-                Invoice.number == str(inv.number).strip(),
+                func.replace(func.lower(Invoice.number), ' ', '') == no_spaces,
                 Invoice.date == inv.date,
                 Invoice.items.any()
             ).first()
+            if not other:
+                tokens = re.findall(r'[a-zA-Z0-9]+', str(inv.number))
+                if len(tokens) >= 2:
+                    pat = "%" + "%".join(tokens) + "%"
+                    other = session.query(Invoice).filter(
+                        Invoice.id != inv.id,
+                        Invoice.number.ilike(pat),
+                        Invoice.date == inv.date,
+                        Invoice.items.any()
+                    ).first()
 
         if other and len(other.items) > 0:
             logger.info(f"[InvoiceDetail] Trovata fattura gemella ID={other.id} con {len(other.items)} articoli. Rimuovo duplicato vuoto ID={inv.id}.")
@@ -522,7 +734,7 @@ class InvoiceDetailDialog(QWidget):
                             supp_name = inv.supplier.name if inv.supplier else "Altri_Fornitori"
                             from app.controllers.invoice_manager import InvoiceManager
                             safe_name = InvoiceManager._normalize_supplier(supp_name)
-                            safe_name = safe_name.replace("SRL", "").replace("S.P.A.", "").replace("S.R.L.", "").replace("SPA", "").strip() or "Varie"
+                            safe_name = safe_name.replace("SRL", "").replace("S.P.A.", "").replace("S.R.L.", "").replace("SPA", "").strip(" .") or "Varie"
 
                             base_nas = r"\\angeleri_new\Pubblica\Database\Fornitori"
                             target_dir = os.path.join(base_nas, safe_name) if os.path.exists(base_nas) else os.path.join(os.getcwd(), "data", "Fornitori", safe_name)
@@ -541,14 +753,11 @@ class InvoiceDetailDialog(QWidget):
         if xml_target_path and os.path.exists(xml_target_path):
             try:
                 from app.controllers.invoice_manager import InvoiceManager
-                mgr = InvoiceManager()
+                mgr = InvoiceManager(session=session)
                 try:
                     mgr.import_invoice(xml_target_path)
                 finally:
-                    try:
-                        mgr.session.close()
-                    except Exception:
-                        pass
+                    mgr.close()
 
                 # Aggiorna il percorso file nella fattura corrente
                 inv.file_path = xml_target_path

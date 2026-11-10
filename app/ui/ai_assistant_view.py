@@ -417,19 +417,37 @@ class AIAssistantWidget(QWidget):
             inv_type = "auto"
             inv_num = None
             inv_year = None
+            inv_id = None
 
-            if len(parts) >= 3:
+            if len(parts) >= 4:
                 inv_type = parts[0]
                 inv_num = parts[1]
                 inv_year = int(parts[2]) if parts[2].isdigit() else None
+                inv_id = int(parts[3]) if parts[3].isdigit() else None
+            elif len(parts) == 3:
+                if parts[0] in ("id", "inv_id") and parts[1].isdigit():
+                    inv_id = int(parts[1])
+                elif parts[1] in ("id", "inv_id") and parts[2].isdigit():
+                    inv_type = parts[0]
+                    inv_id = int(parts[2])
+                else:
+                    inv_type = parts[0]
+                    inv_num = parts[1]
+                    inv_year = int(parts[2]) if parts[2].isdigit() else None
             elif len(parts) == 2:
-                inv_type = parts[0]
-                inv_num = parts[1]
+                if parts[0] in ("id", "inv_id") and parts[1].isdigit():
+                    inv_id = int(parts[1])
+                else:
+                    inv_type = parts[0]
+                    inv_num = parts[1]
             elif len(parts) == 1:
                 inv_num = parts[0]
+                if parts[0].isdigit():
+                    inv_id = int(parts[0])
 
             if hasattr(self.main_window, 'show_invoice_detail'):
                 self.main_window.show_invoice_detail(
+                    invoice_id=inv_id,
                     invoice_type=inv_type,
                     invoice_number=inv_num,
                     invoice_year=inv_year
@@ -437,6 +455,7 @@ class AIAssistantWidget(QWidget):
             else:
                 from app.ui.invoice_detail import InvoiceDetailDialog
                 self._standalone_invoice_dlg = InvoiceDetailDialog(
+                    invoice_id=inv_id,
                     invoice_type=inv_type,
                     invoice_number=inv_num,
                     invoice_year=inv_year,

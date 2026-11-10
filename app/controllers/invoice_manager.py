@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+from typing import Optional, List, Dict, Any, Union
 from sqlalchemy import func, or_, and_, desc
 from sqlalchemy.orm import Session
 from ..database import get_db_session, Supplier, Invoice, InvoiceItem
@@ -43,14 +44,22 @@ SUPPLIER_ALIASES: dict[str, str] = {
 }
 
 class InvoiceManager:
-    def __init__(self):
-        self.session: Session = get_db_session()
+    def __init__(self, session: Session = None):
+        self._owns_session = session is None
+        self.session: Session = session if session is not None else get_db_session()
         self.parsers = [
             XMLSDIInvoiceParser(),
             HTMLInvoiceParser(),
             PDFInvoiceParser(),
         ]
         self.matcher = ProductMatcher(self.session)
+
+    def close(self):
+        if self._owns_session and self.session:
+            try:
+                self.session.close()
+            except Exception:
+                pass
 
     @staticmethod
     def _normalize_supplier(name: str) -> str:
@@ -819,18 +828,165 @@ class InvoiceManager:
     def get_supplier_detail(self, supplier_id: int):
         """Restituisce la scheda completa del fornitore con fatture e catalogo articoli forniti."""
         from app.database import Supplier, Invoice, SupplierProduct
+        from sqlalchemy.orm import joinedload
         supplier = self.session.query(Supplier).filter_by(id=supplier_id).first()
         if not supplier:
             return None
 
         invoices = self.session.query(Invoice).filter_by(supplier_id=supplier_id).order_by(Invoice.date.desc()).all()
-        products = self.session.query(SupplierProduct).filter_by(supplier_id=supplier_id).all()
+        products = (self.session.query(SupplierProduct)
+                    .options(joinedload(SupplierProduct.product))
+                    .filter_by(supplier_id=supplier_id).all())
 
         return {
             'supplier': supplier,
             'invoices': invoices,
             'products': products
         }
+
+    def search_supplier_invoice_items(self, query_text: str = "", supplier_id: Optional[int] = None, global_search: bool = False, limit: int = 300):
+        """
+        Cerca le righe articolo acquistate nelle fatture con eager loading per Invoice, Supplier e Product.
+        """
+        from app.database import Invoice, InvoiceItem, Supplier, Product
+        from sqlalchemy import or_, and_, desc
+        from sqlalchemy.orm import joinedload
+        
+        q = (self.session.query(InvoiceItem)
+             .join(Invoice).join(Supplier).outerjoin(Product)
+             .options(
+                 joinedload(InvoiceItem.invoice).joinedload(Invoice.supplier),
+                 joinedload(InvoiceItem.product)
+             ))
+        
+        if not global_search and supplier_id:
+            q = q.filter(Invoice.supplier_id == supplier_id)
+            
+        if query_text and query_text.strip():
+            words = query_text.strip().split()
+            word_conds = []
+            for w in words:
+                pat = f"%{w}%"
+                word_conds.append(or_(
+                    InvoiceItem.code.ilike(pat),
+                    InvoiceItem.customer_code.ilike(pat),
+                    InvoiceItem.description.ilike(pat),
+                    Invoice.number.ilike(pat),
+                    Supplier.name.ilike(pat),
+                    Product.code.ilike(pat),
+                    Product.name.ilike(pat)
+                ))
+            if word_conds:
+                q = q.filter(and_(*word_conds))
+                
+        items = q.order_by(desc(Invoice.date), desc(Invoice.number), InvoiceItem.id).limit(limit).all()
+        return items
+
+    def link_supplier_item_to_product(
+        self,
+        supplier_id: int,
+        supplier_code: str,
+        product_id: int,
+        supplier_description: Optional[str] = None,
+        sync_to_bkode: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Collega un codice fornitore al codice interno Angeleri (Product).
+        1. Aggiorna/crea il record in SupplierProduct nel database locale.
+        2. Collega tutte le righe fattura InvoiceItem corrispondenti.
+        3. Se sync_to_bkode=True, invia e registra l'associazione direttamente nel modulo mgafoForm di B-Kode Cloud.
+        """
+        from app.database import SupplierProduct, InvoiceItem, Invoice, Supplier, Product
+        
+        supp = self.session.query(Supplier).get(supplier_id)
+        prod = self.session.query(Product).get(product_id)
+        if not supp or not prod:
+            return {"success": False, "message": "Fornitore o Prodotto non trovato nel database locale."}
+            
+        clean_code = (supplier_code or "").strip()
+        if not clean_code:
+            return {"success": False, "message": "Codice fornitore non valido."}
+            
+        # 1. Cerca o crea in SupplierProduct
+        sp = self.session.query(SupplierProduct).filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.supplier_code.ilike(clean_code)
+        ).first()
+        
+        if not sp:
+            sp = SupplierProduct(
+                supplier_id=supplier_id,
+                supplier_name=supp.name,
+                supplier_code=clean_code,
+                supplier_description=supplier_description or prod.name,
+                product_id=product_id
+            )
+            self.session.add(sp)
+        else:
+            sp.product_id = product_id
+            if supplier_description:
+                sp.supplier_description = supplier_description
+                
+        # 2. Aggiorna product_id in tutte le righe fattura InvoiceItem di questo fornitore con questo codice
+        inv_items = self.session.query(InvoiceItem).join(Invoice).filter(
+            Invoice.supplier_id == supplier_id,
+            InvoiceItem.code.ilike(clean_code)
+        ).all()
+        
+        updated_invoices_count = len(inv_items)
+        for it in inv_items:
+            it.product_id = product_id
+            
+        self.session.commit()
+
+        # 3. Sincronizzazione con B-Kode Cloud
+        bkode_result = None
+        if sync_to_bkode:
+            try:
+                from app.utils.bkode_client import BKodeClient
+                client = BKodeClient()
+                
+                # Cerca l'ID fornitore B-Kode tramite lookup rapido
+                bkode_suppliers = client.fetch_bkode_suppliers(query=supp.name, limit=10)
+                bkode_supp_id = None
+                if bkode_suppliers:
+                    # Cerca match migliore
+                    for bs in bkode_suppliers:
+                        bs_name = bs.get("for_ragsoc_1", "").upper().strip("* ")
+                        if supp.name.upper() in bs_name or bs_name in supp.name.upper():
+                            bkode_supp_id = bs.get("for_id")
+                            break
+                    if not bkode_supp_id:
+                        bkode_supp_id = bkode_suppliers[0].get("for_id")
+
+                if bkode_supp_id:
+                    res = client.save_bkode_supplier_article(
+                        bkode_supplier_id=bkode_supp_id,
+                        supplier_code=clean_code,
+                        internal_code=prod.code,
+                        notes="Inserito da Gestionale Angeleri"
+                    )
+                    bkode_result = res
+                else:
+                    bkode_result = {"success": False, "message": f"Fornitore '{supp.name}' non identificato univocamente su B-Kode."}
+            except Exception as e:
+                bkode_result = {"success": False, "message": f"Errore sync B-Kode: {e}"}
+
+        return {
+            "success": True,
+            "updated_items": updated_invoices_count,
+            "bkode_result": bkode_result
+        }
+
+    def unlink_supplier_product(self, supplier_product_id: int) -> bool:
+        """Rimuove l'associazione codice fornitore <-> prodotto master."""
+        from app.database import SupplierProduct
+        sp = self.session.query(SupplierProduct).get(supplier_product_id)
+        if sp:
+            self.session.delete(sp)
+            self.session.commit()
+            return True
+        return False
 
     # ==========================================
     # GESTIONE CATALOGO ARTICOLI MASTER
@@ -860,8 +1016,9 @@ class InvoiceManager:
         return query.order_by(Product.code).all()
 
     def get_products_catalog_with_count(self, category=None, search_text=None, limit=300):
-        """Restituisce (articoli, conteggio_totale) per il catalogo master."""
+        """Restituisce (articoli, conteggio_totale) per il catalogo master con caricamento eager delle relazioni."""
         from app.database import Product
+        from sqlalchemy.orm import selectinload
         query = self.session.query(Product)
         if category and not category.startswith("Tutte"):
             query = query.filter(Product.category == category)
@@ -870,6 +1027,10 @@ class InvoiceManager:
             query = query.filter((Product.code.ilike(s)) | (Product.name.ilike(s)))
             
         total_count = query.count()
+        query = query.options(
+            selectinload(Product.legacy_codes),
+            selectinload(Product.supplier_products)
+        )
         if limit and limit > 0:
             items = query.order_by(Product.code).limit(limit).all()
         else:

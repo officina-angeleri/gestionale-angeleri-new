@@ -46,6 +46,7 @@ class ProductsWidget(QWidget):
         self.search_input.setFixedWidth(260)
         self.search_input.setFixedHeight(36)
         self.search_input.textChanged.connect(self._on_filter_changed)
+        self.search_input.returnPressed.connect(self.refresh_data)
         top_layout.addWidget(self.search_input)
 
         btn_refresh = QPushButton("🔄 Aggiorna")
@@ -194,5 +195,19 @@ class ProductsWidget(QWidget):
             self.main_window.article_search.perform_search()
 
     def refresh_data(self):
+        query = self.search_input.text().strip()
+        if query:
+            try:
+                from app.database import get_db_session
+                from app.utils.background_sync import BKodeSyncEngine
+                session = get_db_session()
+                try:
+                    engine = BKodeSyncEngine()
+                    if engine.client.ensure_authenticated():
+                        engine.sync_single_product(session, query)
+                finally:
+                    session.close()
+            except Exception:
+                pass
         self.load_categories()
         self.load_products()

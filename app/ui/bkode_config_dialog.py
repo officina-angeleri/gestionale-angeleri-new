@@ -208,13 +208,43 @@ class BKodeConfigDialog(QDialog):
         self.btn_sync_now.setEnabled(True)
         self.lbl_status.setText("")
         if result.get("executed"):
-            msg = (
-                f"Sincronizzazione completata con successo!\n\n"
-                f"• Listini Prezzi sincronizzati: {result.get('price_lists_synced', 0)}\n"
-                f"• Voci Articolo Listino aggiornate: {result.get('price_items_synced', 0)}\n"
-                f"• Nuovi Articoli a catalogo: {result.get('products_synced', 0)}\n"
-                f"• Nuove Fatture rilevate: {result.get('invoices_synced', 0)}"
-            )
+            new_pl = result.get('price_lists_synced', 0)
+            new_pi = result.get('price_items_synced', 0)
+            new_pr = result.get('products_synced', 0)
+            new_inv = result.get('invoices_synced', 0)
+
+            tot_pur, tot_sal, tot_prd = 0, 0, 0
+            try:
+                from app.database import get_db_session, Invoice, SalesInvoice, Product
+                s = get_db_session()
+                tot_pur = s.query(Invoice).count()
+                tot_sal = s.query(SalesInvoice).count()
+                tot_prd = s.query(Product).count()
+                s.close()
+            except Exception:
+                pass
+
+            if new_pl == 0 and new_pi == 0 and new_pr == 0 and new_inv == 0:
+                msg = (
+                    "✅ Database già perfettamente sincronizzato!\n\n"
+                    "Tutti i documenti, listini e articoli sono già aggiornati con l'ultimo stato di B-Kode Cloud (nessun nuovo file o variazione presente).\n\n"
+                    f"Riepilogo archivio centrale (Synology):\n"
+                    f"• Fatture Fornitori totali archiviate: {tot_pur:,}\n"
+                    f"• Fatture Clienti totali archiviate: {tot_sal:,}\n"
+                    f"• Articoli a Catalogo registrati: {tot_prd:,}"
+                )
+            else:
+                msg = (
+                    "✅ Sincronizzazione completata con successo!\n\n"
+                    f"• Nuove Fatture importate: {new_inv}\n"
+                    f"• Nuovi Articoli a catalogo: {new_pr}\n"
+                    f"• Listini Prezzi sincronizzati: {new_pl}\n"
+                    f"• Voci Articolo Listino aggiornate: {new_pi}\n\n"
+                    f"Riepilogo archivio centrale (Synology):\n"
+                    f"• Fatture Fornitori totali archiviate: {tot_pur:,}\n"
+                    f"• Fatture Clienti totali archiviate: {tot_sal:,}\n"
+                    f"• Articoli a Catalogo registrati: {tot_prd:,}"
+                )
             QMessageBox.information(self, "Sincronizzazione B-Kode Completata", msg)
             self.sync_requested.emit()
         else:

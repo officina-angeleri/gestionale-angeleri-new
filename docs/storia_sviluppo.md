@@ -1,7 +1,8 @@
 # Gestionale Angeleri — Storia dello Sviluppo
 
-> Documento centrale di tracciamento per il progetto **Gestionale Angeleri (AnalisiFatture)**.
-> Aggiornato: 27 Febbraio 2026 — **Versione 1.1**
+> Documento di tracciamento per il progetto **Gestionale Angeleri (AnalisiFatture)**.
+> **Versione Corrente: v4.0.0 (Novembre 2026)**
+> Per il documento completo e dettagliato di architettura, changelog storico e roadmap, fare riferimento a: [`CHANGELOG_ROADMAP.md`](../CHANGELOG_ROADMAP.md).
 
 ---
 

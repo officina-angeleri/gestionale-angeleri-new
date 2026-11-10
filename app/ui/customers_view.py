@@ -60,7 +60,6 @@ class CustomersWidget(QWidget):
         self.table_customers.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table_customers.setSortingEnabled(True)
         self.table_customers.itemSelectionChanged.connect(self.on_customer_selected)
-        self.table_customers.cellClicked.connect(lambda r, c: self.on_customer_selected())
         left_layout.addWidget(self.table_customers)
 
         self.lbl_count = QLabel("Caricamento clienti...")

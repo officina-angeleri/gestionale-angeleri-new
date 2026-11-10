@@ -15,7 +15,7 @@ import json
 import re
 import urllib3
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
@@ -195,9 +195,22 @@ class BKodeClient:
             r = self.session.get(url, timeout=30)
             if r.status_code == 200 and len(r.content) > 100:
                 return r.content
-            logger.warning(f"[B-Kode] Download XML fxml_id={fxml_id} fallito (Status: {r.status_code}, len={len(r.content)})")
+            logger.warning(f"[B-Kode] Download XML acquisto fxml_id={fxml_id} fallito (Status: {r.status_code}, len={len(r.content)})")
         except Exception as e:
-            logger.error(f"[B-Kode] Errore di rete download XML fxml_id={fxml_id}: {e}")
+            logger.error(f"[B-Kode] Errore di rete download XML acquisto fxml_id={fxml_id}: {e}")
+        return None
+
+    def download_sales_invoice_xml(self, fxml_id: int, file_name: str) -> Optional[bytes]:
+        """Scarica il file XML originale della fattura elettronica clienti da B-Kode Cloud (fatclixmlList)."""
+        b64_file = base64.b64encode(file_name.encode('utf-8')).decode('utf-8')
+        url = f"{self.BASE_URL}/panel/attachment/angeleri/show/fatclixmlList/fxml_file/{fxml_id}/grid/{b64_file}"
+        try:
+            r = self.session.get(url, timeout=30)
+            if r.status_code == 200 and len(r.content) > 100:
+                return r.content
+            logger.warning(f"[B-Kode] Download XML vendita fxml_id={fxml_id} fallito (Status: {r.status_code}, len={len(r.content)})")
+        except Exception as e:
+            logger.error(f"[B-Kode] Errore di rete download XML vendita fxml_id={fxml_id}: {e}")
         return None
 
     # ==========================================
@@ -211,3 +224,151 @@ class BKodeClient:
             payload["filter"] = json.dumps([{"field": "art_tipo", "data": {"type": "string", "value": filter_type}}])
         data = self._post_grid("mgartList", payload)
         return data.get("items", []) if data else []
+
+    def fetch_product_by_code(self, code: str) -> Optional[Dict[str, Any]]:
+        """Cerca un singolo articolo su B-Kode per codice esatto (mgartList)."""
+        if not code or not code.strip():
+            return None
+        payload = {
+            "start": "0", "limit": "1",
+            "filter": json.dumps([{"field": "art_code", "data": {"type": "string", "value": code.strip()}}])
+        }
+        data = self._post_grid("mgartList", payload)
+        items = data.get("items", []) if data else []
+        return items[0] if items else None
+
+    # ==========================================
+    # METODI DI GESTIONE ARTICOLI FORNITORI (MGAFO)
+    # ==========================================
+
+    def fetch_bkode_suppliers(self, query: str = "", limit: int = 50) -> List[Dict[str, Any]]:
+        """Cerca l'ID e la Ragione Sociale dei fornitori da B-Kode (storeCombo_afo_for)."""
+        url = f"{self.BASE_URL}/panel/combojson/mgafoForm/afo_for/angeleri/"
+        payload = {
+            "object": "mgafoForm",
+            "field": "afo_for",
+            "filter": "for_st=1",
+            "query": query.strip() if query else "",
+            "start": "0",
+            "limit": str(limit)
+        }
+        try:
+            r = self.session.post(url, data=payload, timeout=15)
+            if r.status_code == 200 and not r.text.strip().startswith("<!DOCTYPE"):
+                clean = self._clean_json(r.text)
+                data = json.loads(clean)
+                return data.get("rows", [])
+        except Exception as e:
+            logger.error(f"[B-Kode] Errore lookup fornitori B-Kode: {e}")
+        return []
+
+    def fetch_bkode_supplier_articles(self, start: int = 0, limit: int = 500) -> Optional[Dict[str, Any]]:
+        """
+        Estrae la lista delle associazioni Codice Fornitore <-> Ns. Codice da B-Kode (mgafoList).
+        Ritorna un dizionario {'totalCount': int, 'items': List[Dict]} oppure None.
+        """
+        url = f"{self.BASE_URL}/panel/gridjson/mgafoList/angeleri/dummy/"
+        payload = {
+            "start": str(start),
+            "limit": str(limit),
+            "store_filter": " AND 1",
+            "lightWeight": "true",
+            "ext": "js"
+        }
+        headers = {
+            "Referer": f"{self.BASE_URL}/panel/mixed/mgafoForm/mgafoList/0/0/0/obj_0/angeleri/0/0/0/W11bW3xdXQ==//"
+        }
+        try:
+            r = self.session.post(url, data=payload, headers=headers, timeout=30)
+            if r.status_code == 200 and not r.text.strip().startswith("<!DOCTYPE"):
+                clean = self._clean_json(r.text)
+                return json.loads(clean)
+            else:
+                logger.warning(f"[B-Kode] Risposta non JSON da mgafoList (status={r.status_code})")
+        except Exception as e:
+            logger.error(f"[B-Kode] Errore richiesta mgafoList: {e}")
+        return None
+
+    def _to_php_array(self, d: Dict[str, Any]) -> str:
+        """Converte un dizionario Python in una stringa serializzata PHP compatibile con ExtJS js_array_to_php_array."""
+        s = ""
+        for k, v in d.items():
+            sk = str(k)
+            sv = str(v)
+            s += f's:{len(sk)}:"{sk}";s:{len(sv)}:"{sv}";'
+        return f'a:{len(d)}:{{{s}}}'
+
+    def save_bkode_supplier_article(
+        self,
+        bkode_supplier_id: Union[int, str],
+        supplier_code: str,
+        internal_code: str,
+        afo_id: Union[int, str] = 0,
+        notes: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Salva o aggiorna un'associazione Articolo Fornitore direttamente nel form B-Kode (mgafoForm -> panel/dbform).
+        - bkode_supplier_id: ID fornitore B-Kode (es. '474')
+        - supplier_code: Codice articolo del fornitore (es. '03810620')
+        - internal_code: Codice articolo interno Angeleri (es. 'A850-0050')
+        - afo_id: 0 o -1 per nuovo inserimento, altrimenti ID riga per aggiornamento
+        """
+        import urllib.parse
+
+        cmd = "update" if str(afo_id) not in ("0", "-1", "") else "insert"
+        key_val = str(afo_id) if cmd == "update" else "0"
+
+        vals = {
+            "afo_for": str(bkode_supplier_id),
+            "afo_code": supplier_code.strip(),
+            "afo_ns_art": internal_code.strip(),
+            "afo_id": key_val,
+            "afo_soc": "01",
+            "afo_note": notes.strip() if notes else ""
+        }
+
+        fields_str = "::".join(vals.keys()) + "::"
+        values_str = "::".join(vals.values()) + "::"
+        php_arr = self._to_php_array(vals)
+        escaped_php_arr = urllib.parse.quote(php_arr)
+
+        payload = {
+            "code": "mgafoForm",
+            "cmd": cmd,
+            "key_value": key_val,
+            "fields": fields_str,
+            "values": values_str,
+            "values2": escaped_php_arr,
+            "company": "angeleri",
+            "afo_for": str(bkode_supplier_id),
+            "afo_code": supplier_code.strip(),
+            "afo_ns_art": internal_code.strip(),
+            "afo_id": key_val,
+            "afo_soc": "01",
+            "afo_note": notes.strip() if notes else ""
+        }
+
+        headers = {
+            "Referer": f"{self.BASE_URL}/panel/mixed/mgafoForm/mgafoList/0/0/0/obj_0/angeleri/0/0/0/W11bW3xdXQ==//"
+        }
+
+        url = f"{self.BASE_URL}/panel/dbform"
+        try:
+            r = self.session.post(url, data=payload, headers=headers, timeout=20)
+            if r.status_code == 200:
+                try:
+                    res_json = json.loads(r.text)
+                    if res_json.get("success"):
+                        logger.info(f"[B-Kode] Salvataggio articolo fornitore riuscito: afo_id={res_json.get('id')}")
+                        return {"success": True, "id": res_json.get("id"), "raw": res_json}
+                    else:
+                        logger.warning(f"[B-Kode] Salvataggio rifiutato: {r.text}")
+                        return {"success": False, "message": res_json.get("message") or r.text}
+                except Exception:
+                    if "success" in r.text.lower():
+                        return {"success": True, "raw": r.text}
+                    return {"success": False, "message": r.text}
+            return {"success": False, "message": f"HTTP {r.status_code}"}
+        except Exception as e:
+            logger.error(f"[B-Kode] Errore di rete salvataggio articolo fornitore: {e}")
+            return {"success": False, "message": str(e)}

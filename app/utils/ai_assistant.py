@@ -27,11 +27,11 @@ ISTRUZIONI PER LE RICERCHE E RISPOSTE:
 
 REGOLE PER LINK E APERTURA FATTURE:
 - Quando citi o elenchi fatture nelle tabelle o nel testo (vendite clienti o acquisti fornitori), rendi SEMPRE il numero di fattura un link cliccabile:
-  * Per fatture clienti/vendite: usa il link fornito nel tool o formato [Fattura NUMERO](app:invoice:sale:NUMERO:ANNO) (es. [Fattura 217](app:invoice:sale:217:2024), [Fattura 355](app:invoice:sale:355:2019)).
-  * Per fatture fornitori/acquisti: usa formato [Fattura NUMERO](app:invoice:purchase:NUMERO).
+  * Per fatture clienti/vendite: usa il link fornito nel tool (campo 'link_apertura') o formato [Fattura NUMERO](app:invoice:sale:NUMERO:ANNO:ID) (es. [Fattura 217](app:invoice:sale:217:2024:123)).
+  * Per fatture fornitori/acquisti: usa SEMPRE il link fornito nel tool (campo 'link_apertura') o formato [Fattura NUMERO](app:invoice:purchase:NUMERO:ANNO:ID).
 - Se l'utente chiede esplicitamente di 'aprire', 'vedere tutta', o 'mostrare i dettagli' di una fattura (es. 'apri la fattura 217', 'mostrami tutta la fattura 217 di IEN INDUSTRIE'), USA LO STRUMENTO 'dettaglio_completo_fattura'.
 - Nella risposta mostra il riepilogo della testata (cliente, data, totale), la tabella con tutte le righe e il link evidente:
-  [Apri scheda a schermo intero della Fattura NUMERO](app:invoice:sale:NUMERO:ANNO)
+  [Apri scheda a schermo intero della Fattura NUMERO](app:invoice:sale:NUMERO:ANNO:ID)
 
 REGOLE PER RICERCHE FATTURE (ES. 'cerca ultime 3 fatture euromarche', 'fatture di IEN', 'fatture 2024'):
 - Quando l'utente chiede 'ultime fatture', 'fatture di [cliente o fornitore]' (es. 'cerca ultime 3 fatture euromarche'), 'fatture del cliente X', 'fatture emesse', 'fatture del 2024', USA SEMPRE lo strumento 'elenco_fatture'.
@@ -430,7 +430,7 @@ class GeminiAssistant:
                             'prezzo_unitario': float(it.unit_price or 0.0),
                             'totale_riga': float(it.total_price or 0.0),
                             'totale_fattura': float(it.invoice.total_amount or 0.0),
-                            'link_apertura': f"app:invoice:sale:{it.invoice.number}:{it.invoice.year}"
+                            'link_apertura': f"app:invoice:sale:{it.invoice.number}:{it.invoice.year}:{it.invoice.id}"
                         })
                 if tipo_norm in ("auto", "acquisto", "fornitori", "fornitore"):
                     q = session.query(InvoiceItem).join(Invoice).outerjoin(Supplier, Invoice.supplier_id == Supplier.id)
@@ -455,7 +455,7 @@ class GeminiAssistant:
                             'prezzo_unitario': float(it.unit_price or 0.0),
                             'totale_riga': float(it.total_price or 0.0),
                             'totale_fattura': float(it.invoice.total_amount or 0.0),
-                            'link_apertura': f"app:invoice:purchase:{it.invoice.number}"
+                            'link_apertura': f"app:invoice:purchase:{it.invoice.number}:{it.invoice.date.year if it.invoice.date else ''}:{it.invoice.id}"
                         })
                 return json.dumps(results[:limite], ensure_ascii=False)
 
@@ -482,7 +482,7 @@ class GeminiAssistant:
                         'totale_documento': float(inv.total_amount or 0.0),
                         'numero_articoli': len(inv.items),
                         'primo_articolo': first_item,
-                        'link_apertura': f"app:invoice:sale:{inv.number}:{inv.year}"
+                        'link_apertura': f"app:invoice:sale:{inv.number}:{inv.year}:{inv.id}"
                     })
 
             if tipo_norm in ("auto", "acquisto", "fornitori", "fornitore"):
@@ -506,7 +506,7 @@ class GeminiAssistant:
                             'totale_documento': float(inv.total_amount or 0.0),
                             'numero_articoli': len(inv.items),
                             'primo_articolo': first_item,
-                            'link_apertura': f"app:invoice:purchase:{inv.number}"
+                            'link_apertura': f"app:invoice:purchase:{inv.number}:{inv.date.year if inv.date else ''}:{inv.id}"
                         })
 
             if not results:
@@ -788,7 +788,7 @@ class GeminiAssistant:
                     'totale_documento': float(inv_sale.total_amount or 0.0),
                     'file_sorgente': inv_sale.file_path or '-',
                     'righe': items,
-                    'link_apertura': f"app:invoice:sale:{inv_sale.number}:{inv_sale.year}"
+                    'link_apertura': f"app:invoice:sale:{inv_sale.number}:{inv_sale.year}:{inv_sale.id}"
                 }, ensure_ascii=False)
 
             if inv_pur:
@@ -813,7 +813,7 @@ class GeminiAssistant:
                     'totale_documento': float(inv_pur.total_amount or 0.0),
                     'file_sorgente': inv_pur.file_path or '-',
                     'righe': items,
-                    'link_apertura': f"app:invoice:purchase:{inv_pur.number}"
+                    'link_apertura': f"app:invoice:purchase:{inv_pur.number}:{inv_pur.date.year if inv_pur.date else ''}:{inv_pur.id}"
                 }, ensure_ascii=False)
 
             return json.dumps({'errore': f"Fattura n. '{clean_num}' non trovata nell'archivio."})
@@ -848,7 +848,7 @@ class GeminiAssistant:
                     'fornitore': it.invoice.supplier.name if it.invoice.supplier else '-',
                     'data': it.invoice.date.strftime('%d/%m/%Y') if it.invoice.date else '-',
                     'fattura': it.invoice.number,
-                    'link_apertura': f"app:invoice:purchase:{it.invoice.number}",
+                    'link_apertura': f"app:invoice:purchase:{it.invoice.number}:{it.invoice.date.year if it.invoice.date else ''}:{it.invoice.id}",
                     'codice': it.code,
                     'descrizione': it.description,
                     'quantita': float(it.quantity or 0),
@@ -890,7 +890,7 @@ class GeminiAssistant:
                     'data': it.invoice.date.strftime('%d/%m/%Y') if it.invoice.date else '-',
                     'anno': it.invoice.year,
                     'fattura': str(it.invoice.number),
-                    'link_apertura': f"app:invoice:sale:{it.invoice.number}:{it.invoice.year}",
+                    'link_apertura': f"app:invoice:sale:{it.invoice.number}:{it.invoice.year}:{it.invoice.id}",
                     'codice': it.raw_code,
                     'descrizione': it.description,
                     'quantita': float(it.quantity or 0),
@@ -933,7 +933,7 @@ class GeminiAssistant:
                         'totale': float(inv.total_amount or 0.0),
                         'numero_articoli': len(inv.items),
                         'primo_articolo': inv.items[0].description if inv.items else '-',
-                        'link_apertura': f"app:invoice:purchase:{inv.number}"
+                        'link_apertura': f"app:invoice:purchase:{inv.number}:{inv.date.year if inv.date else ''}:{inv.id}"
                     }
                     for inv in invoices[:5]
                 ],
@@ -976,7 +976,7 @@ class GeminiAssistant:
                         'totale': float(inv.total_amount or 0.0),
                         'numero_articoli': len(inv.items),
                         'primo_articolo': inv.items[0].description if inv.items else '-',
-                        'link_apertura': f"app:invoice:sale:{inv.number}:{inv.year}"
+                        'link_apertura': f"app:invoice:sale:{inv.number}:{inv.year}:{inv.id}"
                     }
                     for inv in invoices[:5]
                 ]
